@@ -40,6 +40,11 @@ class Product(models.Model):
         blank=True
     )
     category = models.CharField(max_length=255)
+    audience = models.CharField(
+        max_length=20,
+        choices=[("women", "Women"), ("men", "Men"), ("unisex", "Unisex")],
+        default="unisex",
+    )
     image_url = models.URLField(
         blank=True
     )
@@ -178,6 +183,47 @@ class SavedDeal(models.Model):
 
     def __str__(self):
         return f"{self.user} saved {self.listing}"
+
+
+class ListingReview(models.Model):
+    listing = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name="reviews")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="listing_reviews")
+    rating = models.PositiveSmallIntegerField(choices=[(value, str(value)) for value in range(1, 6)])
+    reason = models.TextField(help_text="Why the user likes this item.")
+    is_approved = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "listing"], name="one_review_per_user_listing")
+        ]
+
+    def __str__(self):
+        return f"{self.rating}/5 review for {self.listing}"
+
+
+class StoreRequest(models.Model):
+    STATUS_CHOICES = [("pending", "Pending"), ("approved", "Approved"), ("declined", "Declined")]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="store_requests",
+    )
+    store_name = models.CharField(max_length=255)
+    website_url = models.URLField()
+    reason = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.store_name} ({self.status})"
     
 
 class SyncRun(models.Model):
@@ -190,5 +236,4 @@ class SyncRun(models.Model):
     successful = models.BooleanField(default=False)
     listings_found = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True)
-
 

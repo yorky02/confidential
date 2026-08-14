@@ -7,6 +7,8 @@ from .models import (
     Membership,
     PriceHistory,
     SavedDeal,
+    ListingReview,
+    StoreRequest,
     SyncRun,
 )
 
@@ -39,3 +41,21 @@ admin.site.register(SyncRun)
 admin.site.register(Membership)
 admin.site.register(SavedDeal)
 
+
+@admin.register(ListingReview)
+class ListingReviewAdmin(admin.ModelAdmin):
+    list_display = ["listing", "user", "rating", "is_approved", "created_at"]
+    list_filter = ["is_approved", "rating", "created_at"]
+    search_fields = ["listing__product__product_name", "user__email", "reason"]
+    actions = ["approve_reviews"]
+
+    @admin.action(description="Approve selected reviews")
+    def approve_reviews(self, request, queryset):
+        queryset.update(is_approved=True)
+
+
+@admin.register(StoreRequest)
+class StoreRequestAdmin(admin.ModelAdmin):
+    list_display = ["store_name", "website_url", "status", "created_at"]
+    list_filter = ["status", "created_at"]
+    search_fields = ["store_name", "website_url", "reason"]

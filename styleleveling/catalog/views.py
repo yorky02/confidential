@@ -1,15 +1,18 @@
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, filters
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Listing, SavedDeal
+from .models import Listing, ListingReview, SavedDeal, StoreRequest
 from .serializers import (
     ListingSerializer,
     MemberSignupSerializer,
     SavedDealSerializer,
+    ListingReviewSerializer,
+    StoreRequestSerializer,
 )
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -28,6 +31,7 @@ class ListingListView(generics.ListAPIView):
     filterset_fields = [
         'store',
         'product__category',
+        'product__audience',
         'is_promo_active',
     ]
     search_fields = [
@@ -113,5 +117,31 @@ class SavedDealDestroyView(generics.DestroyAPIView):
 
     def get_queryset(self):
         return SavedDeal.objects.filter(user=self.request.user)
+
+
+class ListingReviewListCreateView(generics.ListCreateAPIView):
+    serializer_class = ListingReviewSerializer
+
+    def get_permissions(self):
+        return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated()]
+
+    def get_queryset(self):
+        return ListingReview.objects.filter(
+            listing_id=self.kwargs["listing_pk"],
+            is_approved=True,
+        ).select_related("user")
+
+    def perform_create(self, serializer):
+        listing = get_object_or_404(Listing, pk=self.kwargs["listing_pk"])
+        serializer.save(listing=listing)
+
+
+class StoreRequestCreateView(generics.CreateAPIView):
+    serializer_class = StoreRequestSerializer
+    permission_classes = [AllowAny]
+
+    def perform_create(self, serializer):
+        user = self.request.user if self.request.user.is_authenticated else None
+        serializer.save(user=user)
 
     

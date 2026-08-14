@@ -1,7 +1,43 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import Listing, ListingImage, Membership, SavedDeal
+from .models import Listing, ListingImage, ListingReview, Membership, SavedDeal, StoreRequest
+
+
+class ListingReviewSerializer(serializers.ModelSerializer):
+    reviewer_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ListingReview
+        fields = ["id", "listing", "rating", "reason", "reviewer_name", "created_at"]
+        read_only_fields = ["id", "listing", "reviewer_name", "created_at"]
+
+    def get_reviewer_name(self, review):
+        return (review.user.first_name or review.user.username.split("@")[0])[:40]
+
+    def validate_rating(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5.")
+        return value
+
+    def create(self, validated_data):
+        review, _ = ListingReview.objects.update_or_create(
+            user=self.context["request"].user,
+            listing=validated_data["listing"],
+            defaults={
+                "rating": validated_data["rating"],
+                "reason": validated_data["reason"],
+                "is_approved": False,
+            },
+        )
+        return review
+
+
+class StoreRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreRequest
+        fields = ["id", "store_name", "website_url", "reason", "created_at"]
+        read_only_fields = ["id", "created_at"]
 
 
 class ListingImageSerializer(serializers.ModelSerializer):
@@ -15,19 +51,23 @@ class ListingSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.product_name", read_only=True)
     brand_name = serializers.CharField(source="product.brand_name", read_only=True)
     category = serializers.CharField(source="product.category", read_only=True)
+    audience = serializers.CharField(source="product.audience", read_only=True)
     image_urls = serializers.SerializerMethodField()
     images = ListingImageSerializer(many=True, read_only=True)
     outbound_url = serializers.URLField(read_only=True)
+    approved_reviews = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
 
     class Meta:
         model = Listing
         fields = [
             "id", "store", "store_name", "product", "product_name",
-            "brand_name", "category", "external_product_id",
+            "brand_name", "category", "audience", "external_product_id",
             "product_page_url", "affiliate_url", "outbound_url",
             "current_price", "original_price", "quantity", "is_promo_active",
             "is_discounted", "discount_amount", "discount_percentage",
-            "image_urls", "images", "last_checked_time", "last_seen",
+            "image_urls", "images", "approved_reviews", "average_rating",
+            "last_checked_time", "last_seen",
         ]
 
     def get_image_urls(self, listing):
@@ -35,6 +75,16 @@ class ListingSerializer(serializers.ModelSerializer):
         if not urls and listing.product.image_url:
             urls.append(listing.product.image_url)
         return urls
+
+    def get_approved_reviews(self, listing):
+        reviews = listing.reviews.filter(is_approved=True).select_related("user")
+        return ListingReviewSerializer(reviews, many=True).data
+
+    def get_average_rating(self, listing):
+        reviews = list(listing.reviews.filter(is_approved=True))
+        if not reviews:
+            return None
+        return round(sum(review.rating for review in reviews) / len(reviews), 1)
 
 
 class MemberSignupSerializer(serializers.Serializer):
