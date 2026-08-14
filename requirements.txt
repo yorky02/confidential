@@ -7,3 +7,4 @@ dj-database-url>=3.0,<4
 django-cors-headers>=4.7,<5
 gunicorn>=23,<24
 whitenoise>=6.9,<7
+Scrapy>=2.13,<3
