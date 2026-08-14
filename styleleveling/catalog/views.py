@@ -1,8 +1,16 @@
-from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework import generics, filters
-from .models import Listing
-from .serializers import ListingSerializer
+from rest_framework.authtoken.models import Token
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import Listing, SavedDeal
+from .serializers import (
+    ListingSerializer,
+    MemberSignupSerializer,
+    SavedDealSerializer,
+)
 from django_filters.rest_framework import DjangoFilterBackend
 
 # Create your views here.
@@ -11,7 +19,6 @@ def catalog(request):
     return HttpResponse("This page is getting updated...")
 
 class ListingListView(generics.ListAPIView):
-    queryset = Listing.objects.all()
     serializer_class = ListingSerializer
     filter_backends = [
         filters.SearchFilter,
@@ -38,8 +45,73 @@ class ListingListView(generics.ListAPIView):
 
     ordering = ['current_price']
 
+    def member_has_full_access(self):
+        user = self.request.user
+        return (
+            user.is_authenticated
+            and hasattr(user, "styleleveling_membership")
+            and user.styleleveling_membership.has_full_access
+        )
+
+    def get_queryset(self):
+        queryset = Listing.objects.select_related("store", "product").prefetch_related("images")
+        if self.member_has_full_access():
+            return queryset
+        return queryset.filter(store__is_guest_visible=True)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        if not self.member_has_full_access():
+            queryset = queryset[:100]
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
 class ListingDetailView(generics.RetrieveAPIView):
-    queryset = Listing.objects.all()
     serializer_class = ListingSerializer
+
+    def get_queryset(self):
+        queryset = Listing.objects.select_related("store", "product").prefetch_related("images")
+        user = self.request.user
+        has_full_access = (
+            user.is_authenticated
+            and hasattr(user, "styleleveling_membership")
+            and user.styleleveling_membership.has_full_access
+        )
+        if has_full_access:
+            return queryset
+        return queryset.filter(store__is_guest_visible=True)
+
+
+class MemberSignupView(generics.GenericAPIView):
+    serializer_class = MemberSignupSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response(
+            {"token": token.key, "email": user.email, "has_full_access": True},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SavedDealListCreateView(generics.ListCreateAPIView):
+    serializer_class = SavedDealSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedDeal.objects.filter(user=self.request.user).select_related(
+            "listing__store", "listing__product"
+        ).prefetch_related("listing__images")
+
+
+class SavedDealDestroyView(generics.DestroyAPIView):
+    serializer_class = SavedDealSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedDeal.objects.filter(user=self.request.user)
 
     

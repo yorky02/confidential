@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from decimal import Decimal
 
 # Create your models here.
@@ -14,6 +15,10 @@ class Store(models.Model):
     store_name = models.CharField(max_length=255)
     website_url = models.URLField()
     is_active = models.BooleanField(default=True)
+    is_guest_visible = models.BooleanField(
+        default=False,
+        help_text="Allow non-members to see deals from this store.",
+    )
     last_sync_at = models.DateTimeField(
         null=True, 
         blank=True
@@ -48,6 +53,10 @@ class Listing(models.Model):
     product = models.ForeignKey(Product, on_delete= models.CASCADE)
     external_product_id = models.CharField(max_length=50)
     product_page_url = models.URLField()
+    affiliate_url = models.URLField(
+        blank=True,
+        help_text="Optional affiliate link. Falls back to the retailer product URL.",
+    )
     current_price = models.DecimalField(
         max_digits=10,
         decimal_places=2
@@ -71,6 +80,10 @@ class Listing(models.Model):
         blank=True
     )
     missing_count = models.PositiveIntegerField(default=0)
+
+    @property
+    def outbound_url(self):
+        return self.affiliate_url or self.product_page_url
 
     @property
     def is_discounted(self):
@@ -109,6 +122,62 @@ class PriceHistory(models.Model):
         null=True, blank=True
     )
     date_recorded = models.DateTimeField(auto_now_add=True)
+
+
+class ListingImage(models.Model):
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name="images",
+    )
+    image_url = models.URLField()
+    alt_text = models.CharField(max_length=255, blank=True)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return f"Image {self.position + 1} for {self.listing}"
+
+
+class Membership(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="styleleveling_membership",
+    )
+    has_full_access = models.BooleanField(default=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.email or self.user.username} membership"
+
+
+class SavedDeal(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="saved_deals",
+    )
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name="saved_by",
+    )
+    saved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "listing"],
+                name="unique_saved_deal_per_user",
+            )
+        ]
+        ordering = ["-saved_at"]
+
+    def __str__(self):
+        return f"{self.user} saved {self.listing}"
     
 
 class SyncRun(models.Model):

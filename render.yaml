@@ -1,0 +1,26 @@
+databases:
+  - name: styleleveling-db
+    plan: free
+
+services:
+  - type: web
+    name: styleleveling-api
+    runtime: python
+    plan: free
+    buildCommand: ./build.sh
+    startCommand: gunicorn --chdir styleleveling styleleveling.wsgi:application
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: styleleveling-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: styleleveling-api.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://styleleveling-shop.octaviovieira2005.chatgpt.site
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://styleleveling-api.onrender.com

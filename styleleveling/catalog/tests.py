@@ -1,11 +1,12 @@
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import Listing, Product, Store
+from .models import Listing, ListingImage, Membership, Product, SavedDeal, Store
 
 
 class ListingDiscountTests(TestCase):
@@ -14,6 +15,7 @@ class ListingDiscountTests(TestCase):
         self.store = Store.objects.create(
             store_name="Test Store",
             website_url="https://example.com",
+            is_guest_visible=True,
         )
 
         self.product = Product.objects.create(
@@ -96,11 +98,13 @@ class ListingAPITests(APITestCase):
         self.store_one = Store.objects.create(
             store_name="Cotton On",
             website_url="https://cottonon.com",
+            is_guest_visible=True,
         )
 
         self.store_two = Store.objects.create(
             store_name="Example Electronics",
             website_url="https://electronics.example.com",
+            is_guest_visible=True,
         )
 
         self.shirt = Product.objects.create(
@@ -351,3 +355,127 @@ class ListingAPITests(APITestCase):
         self.assertIn("is_discounted", response.data)
         self.assertIn("discount_amount", response.data)
         self.assertIn("discount_percentage", response.data)
+
+
+class DealPlatformFeatureTests(APITestCase):
+    def setUp(self):
+        self.public_store = Store.objects.create(
+            store_name="Public Store",
+            website_url="https://public.example.com",
+            is_guest_visible=True,
+        )
+        self.member_store = Store.objects.create(
+            store_name="Member Store",
+            website_url="https://member.example.com",
+            is_guest_visible=False,
+        )
+        self.product = Product.objects.create(
+            product_name="Deal Product",
+            brand_name="Deal Brand",
+            category="Tops",
+        )
+        self.public_listing = Listing.objects.create(
+            store=self.public_store,
+            product=self.product,
+            external_product_id="PUBLIC-1",
+            product_page_url="https://public.example.com/product",
+            current_price=Decimal("20.00"),
+            original_price=Decimal("40.00"),
+            is_promo_active=True,
+        )
+        self.member_listing = Listing.objects.create(
+            store=self.member_store,
+            product=self.product,
+            external_product_id="MEMBER-1",
+            product_page_url="https://member.example.com/product",
+            affiliate_url="https://member.example.com/product?aff=styleleveling",
+            current_price=Decimal("30.00"),
+            original_price=Decimal("60.00"),
+            is_promo_active=True,
+        )
+        ListingImage.objects.create(
+            listing=self.public_listing,
+            image_url="https://images.example.com/front.jpg",
+            position=0,
+        )
+        ListingImage.objects.create(
+            listing=self.public_listing,
+            image_url="https://images.example.com/back.jpg",
+            position=1,
+        )
+
+    def create_member(self):
+        user = get_user_model().objects.create_user(
+            username="member@example.com",
+            email="member@example.com",
+            password="safe-password-123",
+        )
+        Membership.objects.create(user=user, has_full_access=True)
+        return user
+
+    def test_guest_only_sees_selected_stores(self):
+        response = self.client.get(reverse("listing-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["id"] for row in response.data], [self.public_listing.id])
+
+    def test_member_sees_complete_deal_feed(self):
+        self.client.force_authenticate(self.create_member())
+        response = self.client.get(reverse("listing-list"))
+        self.assertEqual(len(response.data), 2)
+
+    def test_guest_feed_is_limited_to_100_deals(self):
+        Listing.objects.bulk_create([
+            Listing(
+                store=self.public_store,
+                product=self.product,
+                external_product_id=f"EXTRA-{number}",
+                product_page_url=f"https://public.example.com/{number}",
+                current_price=Decimal("10.00"),
+                is_promo_active=True,
+            )
+            for number in range(105)
+        ])
+        response = self.client.get(reverse("listing-list"))
+        self.assertEqual(len(response.data), 100)
+
+    def test_listing_api_returns_multiple_images(self):
+        response = self.client.get(reverse("listing-detail", args=[self.public_listing.id]))
+        self.assertEqual(
+            response.data["image_urls"],
+            [
+                "https://images.example.com/front.jpg",
+                "https://images.example.com/back.jpg",
+            ],
+        )
+
+    def test_affiliate_url_becomes_outbound_url(self):
+        self.client.force_authenticate(self.create_member())
+        response = self.client.get(reverse("listing-detail", args=[self.member_listing.id]))
+        self.assertEqual(
+            response.data["outbound_url"],
+            "https://member.example.com/product?aff=styleleveling",
+        )
+
+    def test_member_signup_creates_full_access_membership(self):
+        response = self.client.post(
+            reverse("member-signup"),
+            {"email": "new@example.com", "password": "safe-password-123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("token", response.data)
+        user = get_user_model().objects.get(email="new@example.com")
+        self.assertTrue(user.styleleveling_membership.has_full_access)
+
+    def test_authenticated_member_can_save_and_remove_deal(self):
+        user = self.create_member()
+        self.client.force_authenticate(user)
+        create_response = self.client.post(
+            reverse("saved-deal-list"),
+            {"listing": self.public_listing.id},
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        saved = SavedDeal.objects.get(user=user, listing=self.public_listing)
+        delete_response = self.client.delete(reverse("saved-deal-detail", args=[saved.id]))
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
