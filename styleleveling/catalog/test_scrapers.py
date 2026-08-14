@@ -6,6 +6,7 @@ from scrapy.http import HtmlResponse, Request
 from .models import Listing, PriceHistory, Store
 from .scrapers.cotton_on import CottonOnSpider
 from .scrapers.pipelines import DjangoCatalogPipeline
+from .scrapers.retailers import HMSpider, UniqloSpider
 
 
 class CottonOnSpiderTests(TestCase):
@@ -66,3 +67,49 @@ class DjangoCatalogPipelineTests(TestCase):
         self.assertEqual(listing.product.audience, "men")
         self.assertEqual(listing.images.count(), 2)
         self.assertEqual(PriceHistory.objects.count(), 2)
+
+
+class RetailerSaleSpiderTests(TestCase):
+    def response(self, html, url):
+        request = Request(url=url)
+        return HtmlResponse(url=url, request=request, body=html, encoding="utf-8")
+
+    def test_json_ld_product_parser_normalizes_a_retailer_item(self):
+        html = """
+          <html><head>
+            <link rel="canonical" href="https://www2.hm.com/en_us/productpage.1234567001.html">
+            <meta property="og:image" content="https://image.hm.com/item-1.jpg?width=400">
+            <script type="application/ld+json">{
+              "@context":"https://schema.org", "@type":"Product",
+              "name":"Relaxed Shirt", "sku":"1234567001", "category":"Shirts",
+              "brand":{"@type":"Brand","name":"H&M"},
+              "image":["https://image.hm.com/item-1.jpg", "https://image.hm.com/item-2.jpg"],
+              "offers":{"@type":"AggregateOffer","lowPrice":"14.99","highPrice":"29.99"}
+            }</script>
+          </head><body></body></html>
+        """
+        spider = HMSpider()
+        response = self.response(
+            html, "https://www2.hm.com/en_us/productpage.1234567001.html"
+        )
+        items = list(spider.parse_product(response, "men"))
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["external_product_id"], "1234567001")
+        self.assertEqual(items[0]["current_price"], Decimal("14.99"))
+        self.assertEqual(items[0]["original_price"], Decimal("29.99"))
+        self.assertEqual(items[0]["audience"], "men")
+        self.assertEqual(items[0]["category"], "Shirts")
+        self.assertEqual(len(items[0]["image_urls"]), 2)
+
+    def test_uniqlo_sale_page_only_follows_product_links(self):
+        html = """
+          <a class="product-tile__link" href="/us/en/products/E123456-000/00">Item</a>
+          <a href="/us/en/feature/sale/women">Navigation</a>
+        """
+        spider = UniqloSpider(audience="women", max_pages=1)
+        response = self.response(html, "https://www.uniqlo.com/us/en/feature/sale/women")
+        requests = list(spider.parse_sale_page(response, "women", 1))
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("/products/E123456-000/00", requests[0].url)

@@ -9,6 +9,8 @@ class CottonOnSpider(scrapy.Spider):
     """Import public Cotton On US sale listings for men and women."""
 
     name = "cotton_on"
+    store_name = "Cotton On"
+    store_url = "https://cottonon.com/US/"
     allowed_domains = ["cottonon.com"]
     sale_pages = {
         "men": "https://cottonon.com/US/co/co-sale/sale-mens/",

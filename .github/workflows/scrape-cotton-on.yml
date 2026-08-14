@@ -1,4 +1,4 @@
-name: Import Cotton On sale deals
+name: Import retailer sale deals
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ALLOWED_HOSTS: localhost
@@ -25,4 +25,4 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Verify database secret
         run: test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL repository secret" && exit 1)
-      - run: python styleleveling/manage.py scrape_cotton_on
+      - run: python styleleveling/manage.py scrape_sales

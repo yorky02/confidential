@@ -18,9 +18,9 @@ class DjangoCatalogPipeline:
 
     def spider_opened(self, spider):
         self.store, _ = Store.objects.update_or_create(
-            store_name="Cotton On",
+            store_name=spider.store_name,
             defaults={
-                "website_url": "https://cottonon.com/US/",
+                "website_url": spider.store_url,
                 "is_active": True,
                 "is_guest_visible": True,
             },
@@ -86,12 +86,15 @@ class DjangoCatalogPipeline:
         return item
 
     def spider_closed(self, spider, reason):
-        successful = reason == "finished"
+        error_count = self.crawler.stats.get_value("log_count/ERROR", 0)
+        successful = reason == "finished" and error_count == 0
         self.store.last_sync_at = timezone.now()
         self.store.save(update_fields=["last_sync_at"])
         self.sync_run.finished_at = timezone.now()
         self.sync_run.successful = successful
         self.sync_run.listings_found = self.listings_found
         if not successful:
-            self.sync_run.error_message = f"Spider closed: {reason}"
+            self.sync_run.error_message = (
+                f"Spider closed: {reason}; logged errors: {error_count}"
+            )
         self.sync_run.save()

@@ -1,7 +1,8 @@
-# Automated Cotton On imports
+# Automated retailer sale imports
 
-The Django project includes a polite Scrapy importer for the public Cotton On
-US men's and women's sale pages. It follows pagination and imports each item's
+The Django project includes polite Scrapy importers for the public men's and
+women's sale pages at Cotton On, PacSun, Hollister, Urban Outfitters, H&M, Gap,
+and Uniqlo. They follow available pagination and import each item's
 name, retailer ID, retailer URL, sale and original prices, audience, category,
 and ordered image gallery.
 
@@ -10,14 +11,15 @@ and ordered image gallery.
 From the repository root:
 
 ```powershell
-python styleleveling/manage.py scrape_cotton_on
+python styleleveling/manage.py scrape_sales
 ```
 
 Useful test options:
 
 ```powershell
-python styleleveling/manage.py scrape_cotton_on --audience men --max-pages 1
-python styleleveling/manage.py scrape_cotton_on --audience women --max-pages 1
+python styleleveling/manage.py scrape_sales --stores pacsun,hm --audience men --max-pages 1
+python styleleveling/manage.py scrape_sales --stores uniqlo --audience women --max-pages 1
+python styleleveling/manage.py scrape_sales --stores gap --audience men --max-pages 1 --max-items 5
 ```
 
 Omit `--max-pages` for the complete import.
@@ -26,7 +28,7 @@ Omit `--max-pages` for the complete import.
 
 The workflow `.github/workflows/scrape-cotton-on.yml` runs every day at
 08:17 UTC and can also be started manually from **GitHub → Actions → Import
-Cotton On sale deals → Run workflow**.
+retailer sale deals → Run workflow**.
 
 Create one repository secret before running it:
 
@@ -41,10 +43,12 @@ temporary database.
 
 ## Import behavior
 
-- Existing Cotton On items are updated by retailer product ID.
+- Existing items are updated by store and retailer product ID.
 - A price-history record is added only when the price changes.
 - Gallery images are replaced in the current retailer order.
-- Cotton On is marked as guest-visible.
+- Imported stores are marked as guest-visible.
 - Each run is recorded in Django Admin under `Sync runs`.
 - The spider obeys `robots.txt`, identifies StyleLeveling in its user agent,
   limits requests per domain, and uses automatic throttling.
+- If a retailer returns an access block or changes its HTML, that store's run
+  records the problem instead of attempting to bypass the restriction.
