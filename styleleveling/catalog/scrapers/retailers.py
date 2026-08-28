@@ -1,7 +1,7 @@
 import json
 import re
 import random
-import base64
+import time
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit, urlunsplit
 
@@ -9,12 +9,7 @@ import scrapy
 
 
 class RetailerSaleSpider(scrapy.Spider):
-    """Base spider for public sale pages with product detail links.
-
-    Retailer-specific subclasses only declare URLs, selectors, and unusual
-    parsing behavior. Request pacing, headers, error handling, and normalized
-    output stay here so all stores follow the same operational standards.
-    """
+    """Base spider for public sale pages with product detail links."""
 
     sale_pages = {}
     product_link_selectors = ()
@@ -25,42 +20,55 @@ class RetailerSaleSpider(scrapy.Spider):
         '[class*="ProductImage"] img::attr(src)',
     )
     custom_settings = {
-        # Temporarily disable robots.txt to test if it's causing blocks
-        "ROBOTSTXT_OBEY": False,
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        # DISABLE proxies - use YOUR home IP with proper fingerprint
+        "USE_PROXIES": False,  # Set to True if you want to use proxies
+        
+        # Use YOUR real Firefox fingerprint (set in middleware)
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+        
         "DOWNLOADER_MIDDLEWARES": {
-            # Run before Scrapy's built-in UserAgentMiddleware (priority 500).
+            # Headers middleware (uses your fingerprint)
             "catalog.scrapers.middlewares.StyleLevelingHeadersMiddleware": 410,
-            # Add proxy middleware (priority 350, before headers)
+            # Proxy middleware (disabled by default)
             "catalog.scrapers.middlewares.ProxyMiddleware": 350,
         },
-        # Conservative defaults copied from the proven Cotton On importer.
-        "DOWNLOAD_DELAY": 3.0,  # Increased from 1.75
+        
+        # Very conservative settings for home IP
+        "DOWNLOAD_DELAY": 5.0,  # 5 second delay between requests
         "RANDOMIZE_DOWNLOAD_DELAY": True,
-        "CONCURRENT_REQUESTS": 2,  # Reduced from 4
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,  # Reduced from 2
+        "CONCURRENT_REQUESTS": 1,  # Only 1 request at a time
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
+        
         "AUTOTHROTTLE_ENABLED": True,
-        "AUTOTHROTTLE_START_DELAY": 2.0,  # Increased from 1.75
-        "AUTOTHROTTLE_MAX_DELAY": 20,  # Increased from 15
-        "RETRY_TIMES": 5,  # Increased from 2
-        "RETRY_HTTP_CODES": [403, 429, 500, 502, 503, 504],
-        "DOWNLOAD_TIMEOUT": 45,  # Increased from 35
+        "AUTOTHROTTLE_START_DELAY": 5.0,
+        "AUTOTHROTTLE_MAX_DELAY": 30,
+        
+        "RETRY_TIMES": 3,
+        "RETRY_HTTP_CODES": [429, 500, 502, 503, 504],  # Don't retry 403
+        
+        "DOWNLOAD_TIMEOUT": 60,
+        "ROBOTSTXT_OBEY": False,  # Disable robots.txt to test
         "LOG_LEVEL": "INFO",
         "HTTPERROR_ALLOWED_CODES": [403],
-        # Added these for better anti-bot evasion
+        
+        # Cookie handling
         "COOKIES_ENABLED": True,
         "COOKIES_DEBUG": False,
+        
+        # Real browser headers (these will be overridden by middleware)
         "DEFAULT_REQUEST_HEADERS": {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'TE': 'trailers',
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
         }
     }
 
@@ -70,6 +78,7 @@ class RetailerSaleSpider(scrapy.Spider):
             raise ValueError("audience must be men, women, or both")
         self.audience = audience
         self.max_pages = int(max_pages) if max_pages else None
+        self._last_request_time = 0
 
     async def start(self):
         audiences = self.sale_pages if self.audience == "both" else [self.audience]
@@ -79,23 +88,16 @@ class RetailerSaleSpider(scrapy.Spider):
                 callback=self.parse_sale_page,
                 cb_kwargs={"audience": audience, "page_number": 1},
                 errback=self.request_failed,
-                dont_filter=True,  # Allow retries of same URL
+                dont_filter=True,
             )
 
     def parse_sale_page(self, response, audience, page_number):
         """Discover product pages and follow catalog pagination."""
 
         if response.status == 403:
-            self.logger.error("%s blocked the public sale page with HTTP 403", self.store_name)
-            # Try alternative approach - sometimes adding a random parameter helps
-            if "?" not in response.url:
-                yield scrapy.Request(
-                    response.url + "?_=" + str(random.randint(1000, 9999)),
-                    callback=self.parse_sale_page,
-                    cb_kwargs={"audience": audience, "page_number": page_number},
-                    errback=self.request_failed,
-                    dont_filter=True,
-                )
+            self.logger.error("%s blocked with HTTP 403", self.store_name)
+            # Wait longer before retrying
+            time.sleep(random.uniform(10, 30))
             return
 
         links = []
@@ -110,14 +112,18 @@ class RetailerSaleSpider(scrapy.Spider):
 
         if not clean_links:
             self.logger.error("No product links found on %s", response.url)
-            # Try alternative link selectors as fallback
             alt_links = response.css('a[href*="product"], a[href*="/p/"], a[href*="/pd/"]::attr(href)').getall()
             for link in alt_links:
                 absolute = response.urljoin(link)
                 if self.is_product_url(absolute) and absolute not in clean_links:
                     clean_links.append(absolute)
 
-        for product_url in clean_links:
+        # Process each product with human-like delay
+        for idx, product_url in enumerate(clean_links):
+            # Add delay between products (like a human browsing)
+            if idx > 0:
+                time.sleep(random.uniform(1.0, 3.0))
+            
             yield scrapy.Request(
                 product_url,
                 callback=self.parse_product,
@@ -128,6 +134,8 @@ class RetailerSaleSpider(scrapy.Spider):
 
         next_url = self.next_page_url(response, page_number)
         if next_url and (self.max_pages is None or page_number < self.max_pages):
+            # Wait before going to next page
+            time.sleep(random.uniform(2.0, 5.0))
             yield response.follow(
                 next_url,
                 callback=self.parse_sale_page,
@@ -139,8 +147,6 @@ class RetailerSaleSpider(scrapy.Spider):
     def parse_product(self, response, sale_audience):
         """Convert a retailer product page into the shared pipeline schema."""
 
-        # JSON-LD is preferred because it is structured and generally more
-        # stable than retailer-specific CSS class names.
         product = self._json_ld_product(response)
         offers = product.get("offers") or {}
         if isinstance(offers, list):
@@ -190,7 +196,7 @@ class RetailerSaleSpider(scrapy.Spider):
         og_image = response.css('meta[property="og:image"]::attr(content)').get()
         if og_image:
             images.append(og_image)
-        # Preserve gallery order while removing duplicate image URLs.
+        
         image_urls = []
         for image in images:
             if isinstance(image, dict):
@@ -226,7 +232,6 @@ class RetailerSaleSpider(scrapy.Spider):
         return True
 
     def next_page_url(self, response, page_number):
-        # Try multiple pagination patterns
         next_selectors = [
             'link[rel="next"]::attr(href)',
             'a[rel="next"]::attr(href)',
@@ -246,8 +251,6 @@ class RetailerSaleSpider(scrapy.Spider):
 
     @staticmethod
     def _json_ld_product(response):
-        """Recursively find a schema.org Product in any JSON-LD graph shape."""
-
         def find_product(value):
             if isinstance(value, dict):
                 kind = value.get("@type")
@@ -324,105 +327,6 @@ class RetailerSaleSpider(scrapy.Spider):
         return str(brand or self.store_name)
 
 
-# ====== MIDDLEWARE CLASSES ======
-
-class ProxyMiddleware:
-    """Rotate proxies for each request to avoid IP-based blocking."""
-    
-    def __init__(self, proxies):
-        self.proxies = proxies
-        self.failed_proxies = set()
-        self.proxy_stats = {}
-        
-    @classmethod
-    def from_crawler(cls, crawler):
-        # Load proxies from settings
-        proxy_list = crawler.settings.get('PROXY_LIST', [])
-        return cls(proxy_list)
-    
-    def process_request(self, request, spider):
-        if not self.proxies:
-            return None
-        
-        # Filter out failed proxies
-        available_proxies = [p for p in self.proxies if p not in self.failed_proxies]
-        
-        if not available_proxies:
-            spider.logger.warning("No available proxies, proceeding without proxy")
-            return None
-        
-        # Select proxy with least failures if stats available, otherwise random
-        if self.proxy_stats:
-            # Sort by failure count (lower is better)
-            sorted_proxies = sorted(
-                available_proxies,
-                key=lambda p: self.proxy_stats.get(p, {}).get('failures', 0)
-            )
-            proxy = sorted_proxies[0]
-        else:
-            proxy = random.choice(available_proxies)
-        
-        request.meta['proxy'] = proxy
-        request.meta['proxy_used'] = proxy  # Track which proxy was used
-        
-        # Handle proxy authentication if needed
-        if '@' in proxy:
-            # Format: http://user:pass@proxy.com:8080 or http://proxy.com:8080
-            parts = proxy.split('@')
-            if len(parts) == 2:
-                auth_part = parts[0].split('//')[-1] if '//' in parts[0] else parts[0]
-                if ':' in auth_part:
-                    auth = base64.b64encode(auth_part.encode()).decode()
-                    request.headers['Proxy-Authorization'] = f'Basic {auth}'
-        
-        spider.logger.debug(f"Using proxy: {proxy}")
-        
-        # Add a random delay to make requests look more human
-        # This is in addition to Scrapy's DOWNLOAD_DELAY
-        if hasattr(spider, 'custom_settings') and spider.custom_settings.get('RANDOMIZE_DOWNLOAD_DELAY'):
-            import time
-            time.sleep(random.uniform(0.1, 0.5))
-        
-        return None
-    
-    def process_response(self, request, response, spider):
-        proxy = request.meta.get('proxy_used')
-        if proxy:
-            # Track proxy performance
-            if proxy not in self.proxy_stats:
-                self.proxy_stats[proxy] = {'failures': 0, 'successes': 0}
-            
-            if response.status in [403, 429, 500, 502, 503, 504]:
-                self.proxy_stats[proxy]['failures'] += 1
-                spider.logger.warning(f"Proxy {proxy} returned status {response.status}")
-                
-                # If proxy fails too often, mark it as failed
-                if self.proxy_stats[proxy]['failures'] > 3:
-                    self.failed_proxies.add(proxy)
-                    spider.logger.warning(f"Marking proxy as failed: {proxy}")
-            else:
-                self.proxy_stats[proxy]['successes'] += 1
-                
-                # Reset failure count after success
-                if self.proxy_stats[proxy]['failures'] > 0:
-                    self.proxy_stats[proxy]['failures'] = max(0, self.proxy_stats[proxy]['failures'] - 1)
-        
-        return response
-    
-    def process_exception(self, request, exception, spider):
-        proxy = request.meta.get('proxy_used')
-        if proxy:
-            if proxy not in self.proxy_stats:
-                self.proxy_stats[proxy] = {'failures': 0, 'successes': 0}
-            self.proxy_stats[proxy]['failures'] += 1
-            
-            if self.proxy_stats[proxy]['failures'] > 3:
-                self.failed_proxies.add(proxy)
-                spider.logger.warning(f"Marking proxy as failed due to exception: {proxy}")
-        
-        return None
-
-
 # ====== SPIDER CLASSES ======
 
 class PacSunSpider(RetailerSaleSpider):
@@ -440,12 +344,11 @@ class PacSunSpider(RetailerSaleSpider):
         '.product-item a::attr(href)',
     )
     
-    # Override custom settings for PacSun specifically
     custom_settings = {
         **RetailerSaleSpider.custom_settings,
-        "DOWNLOAD_DELAY": 5.0,  # Be more conservative for PacSun
+        "DOWNLOAD_DELAY": 8.0,  # Extra slow for PacSun
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
-        "RETRY_TIMES": 8,
+        "RETRY_TIMES": 2,
     }
 
     def is_product_url(self, url):
@@ -502,6 +405,13 @@ class HMSpider(RetailerSaleSpider):
         "women": "https://www2.hm.com/en_us/women/sale/view-all.html",
     }
     product_link_selectors = ('a[href*="productpage."]::attr(href)',)
+    
+    custom_settings = {
+        **RetailerSaleSpider.custom_settings,
+        "DOWNLOAD_DELAY": 10.0,  # Very slow for H&M
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
+        "RETRY_TIMES": 2,
+    }
 
     def is_product_url(self, url):
         return "productpage." in urlsplit(url).path
