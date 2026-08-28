@@ -7,6 +7,15 @@ from urllib.parse import urlsplit, urlunsplit
 
 import scrapy
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+import time
+
 
 class RetailerSaleSpider(scrapy.Spider):
     """Base spider for public sale pages with product detail links."""
@@ -411,7 +420,6 @@ class HMSpider(RetailerSaleSpider):
         "DOWNLOAD_DELAY": 10.0,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
         "RETRY_TIMES": 2,
-        # Enable JavaScript rendering for H&M
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
     }
 
@@ -419,194 +427,258 @@ class HMSpider(RetailerSaleSpider):
         return "productpage." in urlsplit(url).path
     
     def parse_product(self, response, sale_audience):
-        """H&M specific parser that looks for prices in multiple places."""
+        """Use Selenium for H&M to get JavaScript-rendered content."""
         
-        # Try to find price in JSON-LD first
-        product = self._json_ld_product(response)
-        
-        # Check if we have price from JSON-LD
-        current_price = None
-        original_price = None
-        
-        if product:
-            offers = product.get("offers") or {}
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
+        driver = None
+        try:
+            # Setup Chrome options for headless browsing
+            options = Options()
+            options.add_argument('--headless')  # Run in background
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
             
-            current_price = self._decimal(
-                offers.get("price") or 
-                offers.get("lowPrice") or
-                self._extract_hm_price_from_js(response)
-            )
+            # Add your real browser fingerprint
+            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0')
             
-            original_price = self._decimal(
-                offers.get("highPrice") or
-                self._extract_hm_original_price(response)
-            )
-        
-        # If no price from JSON-LD, try other methods
-        if current_price is None:
-            current_price = self._extract_hm_price_from_js(response)
-        
-        if original_price is None:
-            original_price = self._extract_hm_original_price(response)
-        
-        # Get product name
-        name = product.get("name") if product else None
-        if not name:
-            name = self._first_text(
-                response, 
-                ['meta[property="og:title"]::attr(content)', "h1::text", '[class*="product-name"]::text']
-            )
-        
-        # If no price, try to extract from page source
-        if current_price is None:
-            # Try to find price in any script tag
-            for script in response.css('script::text').getall():
-                # Look for price patterns in JavaScript
-                price_match = re.search(r'"price"\s*:\s*"([\d.]+)"', script)
-                if price_match:
-                    current_price = self._decimal(price_match.group(1))
-                    break
+            # Add additional headers to look more like a real browser
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--disable-extensions')
+            options.add_argument('--disable-setuid-sandbox')
+            
+            # Initialize Chrome driver with automatic driver management
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            
+            # Set page load timeout
+            driver.set_page_load_timeout(30)
+            
+            # Load the page
+            self.logger.info(f"Loading H&M product with Selenium: {response.url}")
+            driver.get(response.url)
+            
+            # Wait for the page to load JavaScript content
+            time.sleep(3)  # Initial wait for page to render
+            
+            # Wait for price to load
+            wait = WebDriverWait(driver, 15)
+            
+            # Try multiple selectors for price
+            price_selectors = [
+                '[class*="price"]',
+                '[class*="Price"]',
+                '.product-price',
+                '[data-testid*="price"]',
+                'span[itemprop="price"]',
+                '.price',
+                '.product__price',
+                '.price__current',
+                '[class*="sale-price"]',
+                '.sale-price',
+            ]
+            
+            price = None
+            price_text = None
+            
+            for selector in price_selectors:
+                try:
+                    # Wait for element to be present
+                    element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                    price_text = element.text.strip()
+                    
+                    if price_text:
+                        # Remove currency symbols and clean
+                        price_text = price_text.replace('$', '').replace('€', '').replace('£', '').strip()
+                        
+                        # Extract first number
+                        import re
+                        price_match = re.search(r'[\d.]+', price_text)
+                        if price_match:
+                            price = self._decimal(price_match.group())
+                            if price and price > 0:
+                                self.logger.info(f"Found price: ${price}")
+                                break
+                except Exception as e:
+                    # Selector didn't find anything, try next
+                    continue
+            
+            # If no price found, try finding it in page source
+            if price is None:
+                self.logger.warning(f"Price not found in elements, trying page source...")
+                page_source = driver.page_source
                 
-                # Look for other price patterns
-                price_match = re.search(r'"regularPrice"\s*:\s*"([\d.]+)"', script)
-                if price_match:
-                    current_price = self._decimal(price_match.group(1))
-                    break
-        
-        # Extract product ID
-        product_id = self.external_id_from_url(response.url)
-        
-        # Extract images
-        image_urls = []
-        og_image = response.css('meta[property="og:image"]::attr(content)').get()
-        if og_image:
-            image_urls.append(self._clean_image_url(og_image))
-        
-        # Look for images in product JSON
-        if product:
-            images = product.get("image")
-            if images:
-                if isinstance(images, list):
-                    for img in images:
-                        if isinstance(img, dict):
-                            img = img.get("url") or img.get("contentUrl")
-                        if img:
-                            image_urls.append(self._clean_image_url(img))
-                elif isinstance(images, str):
-                    image_urls.append(self._clean_image_url(images))
-        
-        # Try to get images from HTML
-        if not image_urls:
-            image_urls = response.css('img[class*="product"]::attr(src)').getall()
-            image_urls = [self._clean_image_url(url) for url in image_urls if url]
-        
-        # If still no price, log and skip
-        if current_price is None:
-            self.logger.warning(f"No price found for H&M product: {response.url}")
-            return
-        
-        # Build product data
-        yield {
-            "external_product_id": str(product_id)[:50],
-            "product_name": " ".join(str(name or "H&M item").split()),
-            "brand_name": "H&M",
-            "category": self._breadcrumb(response) or "Clothing",
-            "audience": sale_audience,
-            "product_page_url": response.url,
-            "current_price": current_price,
-            "original_price": original_price or current_price,
-            "image_urls": image_urls[:12],
-        }
-    
-    def _extract_hm_price_from_js(self, response):
-        """Extract price from H&M JavaScript data."""
-        # Look for product data in script tags
-        for script in response.css('script::text').getall():
-            # Look for various price patterns
-            patterns = [
-                r'"price"\s*:\s*"([\d.]+)"',
-                r'"price"\s*:\s*([\d.]+)',
-                r'"currentPrice"\s*:\s*"([\d.]+)"',
-                r'"price_value"\s*:\s*"([\d.]+)"',
-                r'"Price"\s*:\s*([\d.]+)',
-                r'"salePrice"\s*:\s*"([\d.]+)"',
-                r'"listPrice"\s*:\s*"([\d.]+)"',
+                # Look for price patterns in the page source
+                import re
+                price_patterns = [
+                    r'"price"\s*:\s*"([\d.]+)"',
+                    r'"price"\s*:\s*([\d.]+)',
+                    r'"currentPrice"\s*:\s*"([\d.]+)"',
+                    r'"Price"\s*:\s*([\d.]+)',
+                    r'"salePrice"\s*:\s*"([\d.]+)"',
+                    r'productPrice["\']?\s*[:=]\s*["\']?([\d.]+)',
+                ]
+                
+                for pattern in price_patterns:
+                    match = re.search(pattern, page_source)
+                    if match:
+                        price_str = match.group(1)
+                        try:
+                            price = self._decimal(price_str)
+                            if price and price > 0:
+                                self.logger.info(f"Found price in source: ${price}")
+                                break
+                        except:
+                            continue
+            
+            # Get product name
+            name = None
+            name_selectors = [
+                'h1',
+                '[class*="product-name"]',
+                '[class*="ProductName"]',
+                '[data-testid*="product-name"]',
+                '.product-title',
+                'meta[property="og:title"]::attr(content)',
             ]
             
-            for pattern in patterns:
-                match = re.search(pattern, script)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    try:
-                        price = Decimal(price_str)
-                        if price > 0:
-                            return price
-                    except:
-                        continue
-        
-        # Try to find price in HTML
-        price_selectors = [
-            '[class*="price"]::text',
-            '[class*="Price"]::text',
-            '.product-price::text',
-            '[data-testid*="price"]::text',
-            'span[itemprop="price"]::text',
-            'meta[itemprop="price"]::attr(content)',
-        ]
-        
-        for selector in price_selectors:
-            price_text = response.css(selector).get()
-            if price_text:
-                price = self._decimal(price_text)
-                if price:
-                    return price
-        
-        return None
-    
-    def _extract_hm_original_price(self, response):
-        """Extract original/regular price from H&M."""
-        for script in response.css('script::text').getall():
-            patterns = [
-                r'"regularPrice"\s*:\s*"([\d.]+)"',
-                r'"regularPrice"\s*:\s*([\d.]+)',
-                r'"originalPrice"\s*:\s*"([\d.]+)"',
-                r'"listPrice"\s*:\s*"([\d.]+)"',
-                r'"compareAtPrice"\s*:\s*"([\d.]+)"',
+            for selector in name_selectors:
+                try:
+                    if selector.endswith('::attr(content)'):
+                        # Handle meta tags
+                        element = driver.find_element(By.CSS_SELECTOR, selector.replace('::attr(content)', ''))
+                        name = element.get_attribute('content')
+                    else:
+                        element = driver.find_element(By.CSS_SELECTOR, selector)
+                        name = element.text.strip()
+                    
+                    if name:
+                        break
+                except:
+                    continue
+            
+            if not name:
+                name = "H&M item"
+            
+            # Get original/regular price
+            original_price = None
+            original_selectors = [
+                '[class*="original"]',
+                '[class*="regular"]',
+                '[class*="was"]',
+                'del',
+                's',
+                '[class*="strike"]',
+                '[class*="compare"]',
+                '.price__regular',
+                '.regular-price',
             ]
             
-            for pattern in patterns:
-                match = re.search(pattern, script)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    try:
-                        price = Decimal(price_str)
-                        if price > 0:
-                            return price
-                    except:
-                        continue
-        
-        # Look for struck-through prices in HTML
-        original_selectors = [
-            '[class*="original"]::text',
-            '[class*="Original"]::text',
-            '[class*="regular"]::text',
-            '[class*="Regular"]::text',
-            'del::text',
-            's::text',
-            '[class*="strike"]::text',
-            '[class*="compare"]::text',
-        ]
-        
-        for selector in original_selectors:
-            price_text = response.css(selector).get()
-            if price_text:
-                price = self._decimal(price_text)
-                if price:
-                    return price
-        
-        return None
+            for selector in original_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for element in elements:
+                        original_text = element.text.strip()
+                        if original_text:
+                            # Clean the price
+                            original_text = original_text.replace('$', '').replace('€', '').replace('£', '').strip()
+                            import re
+                            price_match = re.search(r'[\d.]+', original_text)
+                            if price_match:
+                                original_price = self._decimal(price_match.group())
+                                if original_price and original_price > 0:
+                                    break
+                    if original_price:
+                        break
+                except:
+                    continue
+            
+            # If no price found, log and skip
+            if price is None:
+                self.logger.warning(f"No price found for H&M product: {response.url}")
+                return
+            
+            # Get images
+            image_urls = []
+            try:
+                # Try to get images from meta tags
+                image_selectors = [
+                    'meta[property="og:image"]',
+                    'meta[name="twitter:image"]',
+                    'img[class*="product"]',
+                    'img[class*="Product"]',
+                    '.product-image img',
+                ]
+                
+                for selector in image_selectors:
+                    if 'meta' in selector:
+                        element = driver.find_element(By.CSS_SELECTOR, selector)
+                        if element:
+                            img_url = element.get_attribute('content')
+                            if img_url:
+                                image_urls.append(img_url)
+                    else:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for element in elements[:5]:  # Limit to 5 images
+                            img_url = element.get_attribute('src')
+                            if img_url and 'data:image' not in img_url:
+                                image_urls.append(img_url)
+                
+                # Clean image URLs
+                image_urls = [self._clean_image_url(url) for url in image_urls if url]
+                image_urls = list(dict.fromkeys(image_urls))[:12]  # Deduplicate and limit
+                
+            except Exception as e:
+                self.logger.warning(f"Could not extract images: {e}")
+            
+            # Build product data
+            product_data = {
+                "external_product_id": self.external_id_from_url(response.url)[:50],
+                "product_name": " ".join(str(name).split())[:255],
+                "brand_name": "H&M",
+                "category": self._breadcrumb_from_selenium(driver) or "Clothing",
+                "audience": sale_audience,
+                "product_page_url": response.url,
+                "current_price": price,
+                "original_price": original_price or price,
+                "image_urls": image_urls[:12],
+            }
+            
+            self.logger.info(f"✅ Scraped H&M product: {product_data['product_name'][:50]} - ${price}")
+            yield product_data
+            
+        except Exception as e:
+            self.logger.error(f"Selenium error for {response.url}: {e}")
+            # Fallback to parent parser if Selenium fails
+            self.logger.info("Falling back to parent parser...")
+            yield from super().parse_product(response, sale_audience)
+            
+        finally:
+            if driver:
+                driver.quit()
+    
+    def _breadcrumb_from_selenium(self, driver):
+        """Extract breadcrumb using Selenium."""
+        try:
+            breadcrumb_selectors = [
+                '[aria-label="breadcrumb"] a',
+                '.breadcrumb a',
+                '[class*="Breadcrumb"] a',
+                '[class*="breadcrumb"] a',
+            ]
+            
+            for selector in breadcrumb_selectors:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    # Get last breadcrumb
+                    last_element = elements[-1]
+                    return last_element.text.strip()
+            
+            return None
+        except:
+            return None
 
 
 class GapSpider(RetailerSaleSpider):
