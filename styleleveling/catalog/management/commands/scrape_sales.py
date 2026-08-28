@@ -18,6 +18,8 @@ from catalog.models import SyncRun
 
 
 SPIDERS = {
+    # Command-line keys map to spider classes. Keeping the registry here makes
+    # validation, workflow selection, and the ``all`` option deterministic.
     "cotton_on": CottonOnSpider,
     "pacsun": PacSunSpider,
     "hollister": HollisterSpider,
@@ -53,6 +55,8 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        """Validate the request, execute spiders, then verify their SyncRuns."""
+
         requested = list(SPIDERS) if options["stores"] == "all" else [
             name.strip() for name in options["stores"].split(",") if name.strip()
         ]
@@ -73,6 +77,8 @@ class Command(BaseCommand):
             {"catalog.scrapers.pipelines.DjangoCatalogPipeline": 300},
             priority="cmdline",
         )
+        # CLOSESPIDER_ITEMCOUNT is intended for inexpensive verification runs;
+        # scheduled production jobs omit it and process the complete catalog.
         if options["max_items"]:
             settings.set("CLOSESPIDER_ITEMCOUNT", options["max_items"], priority="cmdline")
         run_started_at = timezone.now()

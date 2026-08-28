@@ -5,6 +5,7 @@ from scrapy.http import HtmlResponse, Request
 
 from .models import Listing, PriceHistory, Store
 from .scrapers.cotton_on import CottonOnSpider
+from .scrapers.middlewares import StyleLevelingHeadersMiddleware
 from .scrapers.pipelines import DjangoCatalogPipeline
 from .scrapers.retailers import AsosSpider, Forever21Spider, HMSpider, UniqloSpider
 
@@ -137,3 +138,18 @@ class RetailerSaleSpiderTests(TestCase):
 
         self.assertEqual(len(requests), 1)
         self.assertIn("/prd/209187439", requests[0].url)
+
+
+class StyleLevelingHeadersMiddlewareTests(TestCase):
+    def test_adds_standard_headers_without_replacing_request_override(self):
+        request = Request(
+            "https://example.com/sale",
+            headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        middleware = StyleLevelingHeadersMiddleware()
+
+        middleware.process_request(request, CottonOnSpider())
+
+        self.assertIn(b"text/html", request.headers[b"Accept"])
+        self.assertEqual(request.headers[b"Accept-Language"], b"en-US,en;q=0.9")
+        self.assertEqual(request.headers[b"Cache-Control"], b"max-age=0")

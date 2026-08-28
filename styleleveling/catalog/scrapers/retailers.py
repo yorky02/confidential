@@ -7,7 +7,12 @@ import scrapy
 
 
 class RetailerSaleSpider(scrapy.Spider):
-    """Base spider for public sale pages with product detail links."""
+    """Base spider for public sale pages with product detail links.
+
+    Retailer-specific subclasses only declare URLs, selectors, and unusual
+    parsing behavior. Request pacing, headers, error handling, and normalized
+    output stay here so all stores follow the same operational standards.
+    """
 
     sale_pages = {}
     product_link_selectors = ()
@@ -18,8 +23,15 @@ class RetailerSaleSpider(scrapy.Spider):
         '[class*="ProductImage"] img::attr(src)',
     )
     custom_settings = {
+        # Honor published crawl rules. A missing robots.txt naturally means
+        # there are no site-specific rules; an explicit disallow is respected.
         "ROBOTSTXT_OBEY": True,
         "USER_AGENT": "StyleLevelingBot/1.0 (+https://levelingstyle.org)",
+        "DOWNLOADER_MIDDLEWARES": {
+            # Run before Scrapy's built-in UserAgentMiddleware (priority 500).
+            "catalog.scrapers.middlewares.StyleLevelingHeadersMiddleware": 410,
+        },
+        # Conservative defaults copied from the proven Cotton On importer.
         "DOWNLOAD_DELAY": 1.75,
         "RANDOMIZE_DOWNLOAD_DELAY": True,
         "CONCURRENT_REQUESTS": 4,
@@ -51,6 +63,8 @@ class RetailerSaleSpider(scrapy.Spider):
             )
 
     def parse_sale_page(self, response, audience, page_number):
+        """Discover product pages and follow catalog pagination."""
+
         if response.status == 403:
             self.logger.error("%s blocked the public sale page with HTTP 403", self.store_name)
             return
@@ -86,6 +100,10 @@ class RetailerSaleSpider(scrapy.Spider):
             )
 
     def parse_product(self, response, sale_audience):
+        """Convert a retailer product page into the shared pipeline schema."""
+
+        # JSON-LD is preferred because it is structured and generally more
+        # stable than retailer-specific CSS class names.
         product = self._json_ld_product(response)
         offers = product.get("offers") or {}
         if isinstance(offers, list):
@@ -132,6 +150,7 @@ class RetailerSaleSpider(scrapy.Spider):
         og_image = response.css('meta[property="og:image"]::attr(content)').get()
         if og_image:
             images.append(og_image)
+        # Preserve gallery order while removing duplicate image URLs.
         image_urls = []
         for image in images:
             if isinstance(image, dict):
@@ -174,6 +193,8 @@ class RetailerSaleSpider(scrapy.Spider):
 
     @staticmethod
     def _json_ld_product(response):
+        """Recursively find a schema.org Product in any JSON-LD graph shape."""
+
         def find_product(value):
             if isinstance(value, dict):
                 kind = value.get("@type")
