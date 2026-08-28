@@ -6,7 +6,7 @@ from scrapy.http import HtmlResponse, Request
 from .models import Listing, PriceHistory, Store
 from .scrapers.cotton_on import CottonOnSpider
 from .scrapers.pipelines import DjangoCatalogPipeline
-from .scrapers.retailers import HMSpider, UniqloSpider
+from .scrapers.retailers import AsosSpider, Forever21Spider, HMSpider, UniqloSpider
 
 
 class CottonOnSpiderTests(TestCase):
@@ -113,3 +113,27 @@ class RetailerSaleSpiderTests(TestCase):
 
         self.assertEqual(len(requests), 1)
         self.assertIn("/products/E123456-000/00", requests[0].url)
+
+    def test_forever21_sale_page_only_follows_product_links(self):
+        html = """
+          <a href="/collections/womens-sale/products/01348623">Item</a>
+          <a href="/collections/womens-sale">Navigation</a>
+        """
+        spider = Forever21Spider(audience="women", max_pages=1)
+        response = self.response(html, spider.sale_pages["women"])
+        requests = list(spider.parse_sale_page(response, "women", 1))
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("/products/01348623", requests[0].url)
+
+    def test_asos_sale_page_only_follows_product_links(self):
+        html = """
+          <a href="https://www.asos.com/us/asos-design/test-shirt/prd/209187439#colourWayId-1">Item</a>
+          <a href="/us/men/sale/cat/?cid=8409">Navigation</a>
+        """
+        spider = AsosSpider(audience="men", max_pages=1)
+        response = self.response(html, spider.sale_pages["men"])
+        requests = list(spider.parse_sale_page(response, "men", 1))
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("/prd/209187439", requests[0].url)

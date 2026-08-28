@@ -422,3 +422,33 @@ class UniqloSpider(RetailerSaleSpider):
             "original_price": original_price,
             "image_urls": image_urls[:12],
         }
+
+
+class Forever21Spider(RetailerSaleSpider):
+    name = "forever21"
+    store_name = "Forever 21"
+    store_url = "https://www.forever21.com/"
+    allowed_domains = ["forever21.com", "www.forever21.com"]
+    sale_pages = {
+        "men": "https://www.forever21.com/collections/mens-sale",
+        "women": "https://www.forever21.com/collections/womens-sale",
+    }
+    product_link_selectors = ('a[href*="/products/"]::attr(href)',)
+
+    def is_product_url(self, url):
+        return "/products/" in urlsplit(url).path
+
+
+class AsosSpider(RetailerSaleSpider):
+    name = "asos"
+    store_name = "ASOS"
+    store_url = "https://www.asos.com/us/"
+    allowed_domains = ["asos.com", "www.asos.com"]
+    sale_pages = {
+        "men": "https://www.asos.com/us/men/sale/cat/?cid=8409",
+        "women": "https://www.asos.com/us/women/sale/cat/?cid=7046",
+    }
+    product_link_selectors = ('a[href*="/prd/"]::attr(href)',)
+
+    def is_product_url(self, url):
+        return "/prd/" in urlsplit(url).path

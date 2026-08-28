@@ -1,9 +1,12 @@
 from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from catalog.scrapers.cotton_on import CottonOnSpider
 from catalog.scrapers.retailers import (
+    AsosSpider,
+    Forever21Spider,
     GapSpider,
     HMSpider,
     HollisterSpider,
@@ -22,6 +25,8 @@ SPIDERS = {
     "hm": HMSpider,
     "gap": GapSpider,
     "uniqlo": UniqloSpider,
+    "forever21": Forever21Spider,
+    "asos": AsosSpider,
 }
 
 
@@ -70,7 +75,8 @@ class Command(BaseCommand):
         )
         if options["max_items"]:
             settings.set("CLOSESPIDER_ITEMCOUNT", options["max_items"], priority="cmdline")
-        latest_run_ids = set(SyncRun.objects.values_list("id", flat=True))
+        run_started_at = timezone.now()
+        requested_store_names = [SPIDERS[name].store_name for name in requested]
         process = CrawlerProcess(settings)
         for name in requested:
             process.crawl(
@@ -79,7 +85,17 @@ class Command(BaseCommand):
                 max_pages=options["max_pages"],
             )
         process.start()
-        runs = list(SyncRun.objects.exclude(id__in=latest_run_ids).select_related("store").order_by("store__store_name"))
+        # Matrix jobs share one database and may run concurrently. Restrict the
+        # summary to this command's retailers so one job cannot report another
+        # job's SyncRun records.
+        runs = list(
+            SyncRun.objects.filter(
+                started_at__gte=run_started_at,
+                store__store_name__in=requested_store_names,
+            )
+            .select_related("store")
+            .order_by("store__store_name")
+        )
         successful_stores = 0
         self.stdout.write("\nRetailer import summary")
         for run in runs:
