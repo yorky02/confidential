@@ -9,8 +9,8 @@ from .scrapers.middlewares import StyleLevelingHeadersMiddleware
 from .scrapers.fashion_filter import fashion_product_decision
 from .scrapers.pipelines import DjangoCatalogPipeline
 from .scrapers.retailers import (
-    AdidasSpider,
     AsosSpider,
+    CalvinKleinSpider,
     ColumbiaSpider,
     Forever21Spider,
     HMSpider,
@@ -169,6 +169,7 @@ class FashionProductFilterTests(TestCase):
         self.assertTrue(fashion_product_decision("Oversized graphic T-shirt")[0])
         self.assertTrue(fashion_product_decision("Leather platform sneakers")[0])
         self.assertTrue(fashion_product_decision("Mini shoulder bag")[0])
+        self.assertTrue(fashion_product_decision("Open-hem fleece pants - Cream")[0])
 
     def test_rejects_asos_face_and_body_products(self):
         self.assertFalse(
@@ -213,16 +214,16 @@ class FashionProductFilterTests(TestCase):
     def test_new_store_spiders_only_follow_product_urls(self):
         cases = (
             (
-                AdidasSpider,
-                "https://www.adidas.com/us/men-sale",
-                '<a href="/us/campus-shoes/HQ8708.html">Product</a>',
-                "HQ8708.html",
-            ),
-            (
                 ColumbiaSpider,
                 "https://www.columbia.com/c/mens-clothing-sale/",
                 '<a href="/p/mens-rain-jacket-1533891.html?color=379">Product</a>',
                 "1533891.html",
+            ),
+            (
+                CalvinKleinSpider,
+                "https://www.calvinklein.us/en/sale/men?sz=48&start=0",
+                '<a href="/en/sale/men/tops/cotton-blend-relaxed-t-shirt/4RF225G-3Q0.html">Product</a>',
+                "4RF225G-3Q0.html",
             ),
             (
                 NikeSpider,

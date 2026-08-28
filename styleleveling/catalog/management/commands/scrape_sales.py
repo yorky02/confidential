@@ -5,8 +5,8 @@ from scrapy.utils.project import get_project_settings
 
 from catalog.scrapers.cotton_on import CottonOnSpider
 from catalog.scrapers.retailers import (
-    AdidasSpider,
     AsosSpider,
+    CalvinKleinSpider,
     ColumbiaSpider,
     Forever21Spider,
     NikeSpider,
@@ -20,9 +20,9 @@ SPIDERS = {
     "cotton_on": CottonOnSpider,
     "forever21": Forever21Spider,
     "asos": AsosSpider,
-    "adidas": AdidasSpider,
     "columbia": ColumbiaSpider,
     "nike": NikeSpider,
+    "calvin_klein": CalvinKleinSpider,
 }
 
 

@@ -35,9 +35,9 @@ jobs:
           # Keep ASOS isolated so a temporary retailer block does not prevent
           # the other verified stores from completing their imports.
           - {store: asos, allow_failure: true}
-          - {store: adidas, allow_failure: false}
           - {store: columbia, allow_failure: false}
           - {store: nike, allow_failure: false}
+          - {store: calvin_klein, allow_failure: false}
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

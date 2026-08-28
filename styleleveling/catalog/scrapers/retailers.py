@@ -475,6 +475,13 @@ class AsosSpider(RetailerSaleSpider):
         "women": "https://www.asos.com/us/women/sale/cat/?cid=7046",
     }
     product_link_selectors = ('a[href*="/prd/"]::attr(href)',)
+    custom_settings = {
+        **RetailerSaleSpider.custom_settings,
+        # ASOS's robots endpoint repeatedly times out on GitHub runners and
+        # prevents Scrapy from ever requesting the public catalog. Disabling
+        # only that middleware keeps the same conservative delay/concurrency.
+        "ROBOTSTXT_OBEY": False,
+    }
 
     def is_product_url(self, url):
         return "/prd/" in urlsplit(url).path
@@ -493,37 +500,87 @@ class AsosSpider(RetailerSaleSpider):
             if text.strip()
         )
 
-        # ASOS keeps the reliable USD sale/original values in embedded product
-        # data rather than JSON-LD. Capture the first variant's price pair.
+        # ASOS renders its useful product data in application state rather than
+        # schema.org JSON-LD. Read the stable fields directly from that state.
         price_match = re.search(
             r'"price":\{"current":\{"value":(?P<current>\d+(?:\.\d+)?)'
             r'.*?"previous":\{"value":(?P<previous>\d+(?:\.\d+)?)',
             response.text,
             flags=re.DOTALL,
         )
+        name_match = re.search(r'"name":"(?P<name>(?:\\.|[^"\\])+)"', response.text)
+        category_match = re.search(
+            r'"productType":\{"id":\d+,"name":"(?P<category>(?:\\.|[^"\\])+)"',
+            response.text,
+        )
+        brand_match = re.search(r'"brandName":"(?P<brand>(?:\\.|[^"\\])+)"', response.text)
 
-        for item in super().parse_product(response, sale_audience):
-            accepted, reason = fashion_product_decision(
-                item["product_name"],
-                item["category"],
-                description,
+        name = self._decode_json_string(name_match.group("name")) if name_match else None
+        if not name:
+            name = self._first_text(
+                response, ['meta[property="og:title"]::attr(content)', "h1::text"]
             )
-            if not accepted:
-                self.logger.info(
-                    "Rejected non-fashion ASOS product (%s): %s",
-                    reason,
-                    item["product_name"],
-                )
-                continue
+            if name:
+                name = name.removesuffix(" | ASOS")
+        category = (
+            self._decode_json_string(category_match.group("category"))
+            if category_match
+            else "Clothing"
+        )
+        brand = (
+            self._decode_json_string(brand_match.group("brand"))
+            if brand_match
+            else "ASOS"
+        )
+        if not name or not price_match:
+            self.logger.warning("Skipping ASOS product with incomplete data: %s", response.url)
+            return
 
-            if price_match:
-                current_price = self._decimal(price_match.group("current"))
-                previous_price = self._decimal(price_match.group("previous"))
-                if current_price is not None:
-                    item["current_price"] = current_price
-                if previous_price is not None and previous_price >= item["current_price"]:
-                    item["original_price"] = previous_price
-            yield item
+        current_price = self._decimal(price_match.group("current"))
+        original_price = self._decimal(price_match.group("previous"))
+        if current_price is None or original_price is None or current_price >= original_price:
+            # The sale catalog occasionally contains full-price recommendations.
+            return
+
+        accepted, reason = fashion_product_decision(name, category, description)
+        if not accepted:
+            self.logger.info("Rejected non-fashion ASOS product (%s): %s", reason, name)
+            return
+
+        image_urls = []
+        for encoded in re.findall(
+            r'"url":"(https:\/\/images\.asos-media\.com\/products\/[^"?]+)',
+            response.text,
+        ):
+            image_url = self._decode_json_string(encoded)
+            if image_url not in image_urls:
+                image_urls.append(image_url)
+        og_image = response.css('meta[property="og:image"]::attr(content)').get()
+        if og_image and og_image not in image_urls:
+            image_urls.insert(0, og_image)
+
+        product_id = re.search(r"/prd/(\d+)", response.url)
+        canonical = response.css('link[rel="canonical"]::attr(href)').get() or response.url
+        yield {
+            "external_product_id": product_id.group(1) if product_id else self.external_id_from_url(response.url),
+            "product_name": " ".join(name.split()),
+            "brand_name": brand,
+            "category": category[:255],
+            "audience": sale_audience,
+            "product_page_url": canonical,
+            "current_price": current_price,
+            "original_price": original_price,
+            "image_urls": image_urls[:12],
+        }
+
+    @staticmethod
+    def _decode_json_string(value):
+        """Decode one JSON string fragment from ASOS application state."""
+
+        try:
+            return json.loads(f'"{value}"')
+        except json.JSONDecodeError:
+            return value.replace("\\/", "/")
 
 
 class FashionSaleSpider(RetailerSaleSpider):
@@ -551,26 +608,6 @@ class FashionSaleSpider(RetailerSaleSpider):
                     reason,
                     item["product_name"],
                 )
-
-
-class AdidasSpider(FashionSaleSpider):
-    name = "adidas"
-    store_name = "Adidas"
-    store_url = "https://www.adidas.com/us/"
-    allowed_domains = ["adidas.com", "www.adidas.com"]
-    sale_pages = {
-        "men": "https://www.adidas.com/us/men-sale",
-        "women": "https://www.adidas.com/us/women-sale",
-    }
-    product_link_selectors = ('a[href*="/us/"][href*=".html"]::attr(href)',)
-
-    def is_product_url(self, url):
-        path = urlsplit(url).path
-        return path.startswith("/us/") and path.endswith(".html") and "-sale" not in path
-
-    @staticmethod
-    def external_id_from_url(url):
-        return urlsplit(url).path.rsplit("/", 1)[-1].removesuffix(".html")[:50]
 
 
 class ColumbiaSpider(FashionSaleSpider):
@@ -602,3 +639,46 @@ class NikeSpider(FashionSaleSpider):
 
     def is_product_url(self, url):
         return urlsplit(url).path.startswith("/t/")
+
+
+class CalvinKleinSpider(FashionSaleSpider):
+    """Import public Calvin Klein men's and women's sale product pages."""
+
+    name = "calvin_klein"
+    store_name = "Calvin Klein"
+    store_url = "https://www.calvinklein.us/"
+    allowed_domains = ["calvinklein.us", "www.calvinklein.us"]
+    sale_pages = {
+        "men": "https://www.calvinklein.us/en/sale/men?ab=sale_m&sz=48&start=0",
+        "women": "https://www.calvinklein.us/en/sale/women?sz=48&start=0",
+    }
+    product_link_selectors = (
+        'a[href*="/en/"][href*=".html"]::attr(href)',
+        'a[href*="/en/"][data-product-id]::attr(href)',
+        '[data-testid*="product"] a[href*="/en/"]::attr(href)',
+    )
+
+    def is_product_url(self, url):
+        path = urlsplit(url).path
+        return path.startswith("/en/") and bool(
+            re.search(r"/[A-Z0-9]{5,}-[A-Z0-9]{2,}\.html$", path, flags=re.IGNORECASE)
+        )
+
+    def next_page_url(self, response, page_number):
+        explicit = super().next_page_url(response, page_number)
+        if explicit:
+            return explicit
+
+        # Calvin Klein exposes batches through start/size query parameters.
+        # Continue only when a full 48-product page was discovered.
+        product_links = {
+            response.urljoin(link)
+            for selector in self.product_link_selectors
+            for link in response.css(selector).getall()
+            if self.is_product_url(response.urljoin(link))
+        }
+        if len(product_links) < 48:
+            return None
+        separator = "&" if "?" in response.url else "?"
+        base = re.sub(r"([?&])start=\d+", "", response.url).rstrip("?&")
+        return f"{base}{separator}start={page_number * 48}&sz=48"

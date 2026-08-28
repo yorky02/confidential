@@ -7,7 +7,9 @@ import re
 # as "body" or "coat", so a positive match must never override these signals.
 NON_FASHION_PATTERNS = (
     r"\b(face|skin|skincare|makeup|cosmetic|beauty|grooming|wellness)\b",
-    r"\b(cream|moisturi[sz]er|serum|cleanser|toner|scrub|lotion|soap)\b",
+    r"\b(moisturi[sz]er|serum|cleanser|toner|scrub|lotion|soap)\b",
+    # Avoid treating fashion color names such as "cream pants" as skincare.
+    r"\b(face|body|hand|eye|skin|daily defense|snail|all in one)\s+cream\b",
     r"\b(shampoo|conditioner|haircare|hairspray|hair oil|scalp)\b",
     r"\b(mascara|lipstick|lip gloss|foundation|concealer|eyeliner)\b",
     r"\b(fragrance|perfume|aftershave|deodorant|sunscreen|spf)\b",
@@ -25,7 +27,7 @@ FASHION_PATTERNS = (
     r"\b(jacket|coat|blazer|vest|waistcoat|parka|shacket|gilet)\b",
     r"\b(hoodie|sweatshirt|sweater|cardigan|jumper|pullover|fleece)\b",
     r"\b(shoes?|sneakers?|trainers?|boots?|sandals?|heels?|loafers?|flats?)\b",
-    r"\b(bra|briefs?|boxers?|underwear|lingerie|socks?|tights?)\b",
+    r"\b(bra|briefs?|boxers?|jock straps?|underwear|lingerie|socks?|tights?)\b",
     r"\b(swimwear|swimsuit|bikini|swim shorts?|trunks?)\b",
     r"\b(bag|backpack|purse|wallet|belt|hat|cap|beanie|scarf|gloves?)\b",
     r"\b(necklace|earrings?|bracelet|ring|jewelry|watch|sunglasses)\b",
@@ -52,4 +54,3 @@ def fashion_product_decision(name, category="", description=""):
     if _matches_any(text, FASHION_PATTERNS):
         return True, "matched a wearable fashion term"
     return False, "no reliable wearable fashion term"
-
