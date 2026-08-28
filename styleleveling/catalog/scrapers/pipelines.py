@@ -3,6 +3,7 @@ from django.utils import timezone
 from scrapy import signals
 
 from catalog.models import Listing, ListingImage, PriceHistory, Product, Store, SyncRun
+from catalog.classification import classify_category
 
 
 class DjangoCatalogPipeline:
@@ -45,8 +46,15 @@ class DjangoCatalogPipeline:
 
         product.product_name = item["product_name"]
         product.brand_name = item["brand_name"]
-        product.category = item["category"]
         product.audience = item["audience"]
+        product.source_category = item["category"]
+        if not product.category_locked:
+            category, confidence, needs_review = classify_category(
+                item["product_name"], item["category"], item["audience"]
+            )
+            product.category = category
+            product.category_confidence = confidence
+            product.needs_category_review = needs_review
         product.image_url = item["image_urls"][0] if item["image_urls"] else ""
         product.save()
 

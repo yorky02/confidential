@@ -11,6 +11,7 @@ from catalog.scrapers.retailers import (
     UniqloSpider,
     UrbanOutfittersSpider,
 )
+from catalog.models import SyncRun
 
 
 SPIDERS = {
@@ -33,6 +34,7 @@ class Command(BaseCommand):
             default="all",
             help="Comma-separated store keys or 'all' (default).",
         )
+        parser.add_argument("--minimum-successful-stores", type=int, default=2)
         parser.add_argument(
             "--audience",
             choices=["men", "women", "both"],
@@ -68,6 +70,7 @@ class Command(BaseCommand):
         )
         if options["max_items"]:
             settings.set("CLOSESPIDER_ITEMCOUNT", options["max_items"], priority="cmdline")
+        latest_run_ids = set(SyncRun.objects.values_list("id", flat=True))
         process = CrawlerProcess(settings)
         for name in requested:
             process.crawl(
@@ -76,4 +79,19 @@ class Command(BaseCommand):
                 max_pages=options["max_pages"],
             )
         process.start()
-        self.stdout.write(self.style.SUCCESS("Sale imports finished."))
+        runs = list(SyncRun.objects.exclude(id__in=latest_run_ids).select_related("store").order_by("store__store_name"))
+        successful_stores = 0
+        self.stdout.write("\nRetailer import summary")
+        for run in runs:
+            imported = run.successful and run.listings_found > 0
+            successful_stores += int(imported)
+            status = "IMPORTED" if imported else "FAILED/EMPTY"
+            detail = f" ({run.error_message})" if run.error_message else ""
+            self.stdout.write(f"- {run.store.store_name}: {status}, {run.listings_found} listings{detail}")
+        minimum = min(options["minimum_successful_stores"], len(requested))
+        if successful_stores < minimum:
+            raise CommandError(
+                f"Only {successful_stores} retailer(s) imported products; expected at least {minimum}. "
+                "Open this workflow log and review the retailer summary above."
+            )
+        self.stdout.write(self.style.SUCCESS(f"Sale imports finished across {successful_stores} retailers."))

@@ -16,7 +16,15 @@ from .serializers import (
     StoreRequestSerializer,
     StoreSerializer,
 )
+from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
+
+class ListingFilter(django_filters.FilterSet):
+    product__category = django_filters.CharFilter(field_name="product__category")
+
+    class Meta:
+        model = Listing
+        fields = ["store", "product__category", "product__audience", "is_promo_active"]
 
 # Create your views here.
 
@@ -25,16 +33,11 @@ def catalog(request):
 
 class ListingListView(generics.ListAPIView):
     serializer_class = ListingSerializer
+    filterset_class = ListingFilter
     filter_backends = [
         filters.SearchFilter,
         filters.OrderingFilter,
         DjangoFilterBackend,
-    ]
-    filterset_fields = [
-        'store',
-        'product__category',
-        'product__audience',
-        'is_promo_active',
     ]
     search_fields = [
         'product__product_name',

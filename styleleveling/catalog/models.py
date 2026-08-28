@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from decimal import Decimal
+from .classification import CATEGORY_CHOICES
 
 # Create your models here.
 # Use DecimalField for money instead of FloatField
@@ -39,7 +40,11 @@ class Product(models.Model):
         max_length=255,
         blank=True
     )
-    category = models.CharField(max_length=255)
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default="Uncategorized")
+    source_category = models.CharField(max_length=255, blank=True, help_text="Original category supplied by the retailer.")
+    category_confidence = models.PositiveSmallIntegerField(default=0)
+    needs_category_review = models.BooleanField(default=True, db_index=True)
+    category_locked = models.BooleanField(default=False, help_text="Keep the administrator's category during future imports.")
     audience = models.CharField(
         max_length=20,
         choices=[("women", "Women"), ("men", "Men"), ("unisex", "Unisex")],
@@ -48,6 +53,12 @@ class Product(models.Model):
     image_url = models.URLField(
         blank=True
     )
+
+class CategoryReview(Product):
+    class Meta:
+        proxy = True
+        verbose_name = "Category review"
+        verbose_name_plural = "Category review queue"
 
 class Listing(models.Model):
 
