@@ -408,13 +408,205 @@ class HMSpider(RetailerSaleSpider):
     
     custom_settings = {
         **RetailerSaleSpider.custom_settings,
-        "DOWNLOAD_DELAY": 10.0,  # Very slow for H&M
+        "DOWNLOAD_DELAY": 10.0,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
         "RETRY_TIMES": 2,
+        # Enable JavaScript rendering for H&M
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
     }
 
     def is_product_url(self, url):
         return "productpage." in urlsplit(url).path
+    
+    def parse_product(self, response, sale_audience):
+        """H&M specific parser that looks for prices in multiple places."""
+        
+        # Try to find price in JSON-LD first
+        product = self._json_ld_product(response)
+        
+        # Check if we have price from JSON-LD
+        current_price = None
+        original_price = None
+        
+        if product:
+            offers = product.get("offers") or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            
+            current_price = self._decimal(
+                offers.get("price") or 
+                offers.get("lowPrice") or
+                self._extract_hm_price_from_js(response)
+            )
+            
+            original_price = self._decimal(
+                offers.get("highPrice") or
+                self._extract_hm_original_price(response)
+            )
+        
+        # If no price from JSON-LD, try other methods
+        if current_price is None:
+            current_price = self._extract_hm_price_from_js(response)
+        
+        if original_price is None:
+            original_price = self._extract_hm_original_price(response)
+        
+        # Get product name
+        name = product.get("name") if product else None
+        if not name:
+            name = self._first_text(
+                response, 
+                ['meta[property="og:title"]::attr(content)', "h1::text", '[class*="product-name"]::text']
+            )
+        
+        # If no price, try to extract from page source
+        if current_price is None:
+            # Try to find price in any script tag
+            for script in response.css('script::text').getall():
+                # Look for price patterns in JavaScript
+                price_match = re.search(r'"price"\s*:\s*"([\d.]+)"', script)
+                if price_match:
+                    current_price = self._decimal(price_match.group(1))
+                    break
+                
+                # Look for other price patterns
+                price_match = re.search(r'"regularPrice"\s*:\s*"([\d.]+)"', script)
+                if price_match:
+                    current_price = self._decimal(price_match.group(1))
+                    break
+        
+        # Extract product ID
+        product_id = self.external_id_from_url(response.url)
+        
+        # Extract images
+        image_urls = []
+        og_image = response.css('meta[property="og:image"]::attr(content)').get()
+        if og_image:
+            image_urls.append(self._clean_image_url(og_image))
+        
+        # Look for images in product JSON
+        if product:
+            images = product.get("image")
+            if images:
+                if isinstance(images, list):
+                    for img in images:
+                        if isinstance(img, dict):
+                            img = img.get("url") or img.get("contentUrl")
+                        if img:
+                            image_urls.append(self._clean_image_url(img))
+                elif isinstance(images, str):
+                    image_urls.append(self._clean_image_url(images))
+        
+        # Try to get images from HTML
+        if not image_urls:
+            image_urls = response.css('img[class*="product"]::attr(src)').getall()
+            image_urls = [self._clean_image_url(url) for url in image_urls if url]
+        
+        # If still no price, log and skip
+        if current_price is None:
+            self.logger.warning(f"No price found for H&M product: {response.url}")
+            return
+        
+        # Build product data
+        yield {
+            "external_product_id": str(product_id)[:50],
+            "product_name": " ".join(str(name or "H&M item").split()),
+            "brand_name": "H&M",
+            "category": self._breadcrumb(response) or "Clothing",
+            "audience": sale_audience,
+            "product_page_url": response.url,
+            "current_price": current_price,
+            "original_price": original_price or current_price,
+            "image_urls": image_urls[:12],
+        }
+    
+    def _extract_hm_price_from_js(self, response):
+        """Extract price from H&M JavaScript data."""
+        # Look for product data in script tags
+        for script in response.css('script::text').getall():
+            # Look for various price patterns
+            patterns = [
+                r'"price"\s*:\s*"([\d.]+)"',
+                r'"price"\s*:\s*([\d.]+)',
+                r'"currentPrice"\s*:\s*"([\d.]+)"',
+                r'"price_value"\s*:\s*"([\d.]+)"',
+                r'"Price"\s*:\s*([\d.]+)',
+                r'"salePrice"\s*:\s*"([\d.]+)"',
+                r'"listPrice"\s*:\s*"([\d.]+)"',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, script)
+                if match:
+                    price_str = match.group(1).replace(',', '')
+                    try:
+                        price = Decimal(price_str)
+                        if price > 0:
+                            return price
+                    except:
+                        continue
+        
+        # Try to find price in HTML
+        price_selectors = [
+            '[class*="price"]::text',
+            '[class*="Price"]::text',
+            '.product-price::text',
+            '[data-testid*="price"]::text',
+            'span[itemprop="price"]::text',
+            'meta[itemprop="price"]::attr(content)',
+        ]
+        
+        for selector in price_selectors:
+            price_text = response.css(selector).get()
+            if price_text:
+                price = self._decimal(price_text)
+                if price:
+                    return price
+        
+        return None
+    
+    def _extract_hm_original_price(self, response):
+        """Extract original/regular price from H&M."""
+        for script in response.css('script::text').getall():
+            patterns = [
+                r'"regularPrice"\s*:\s*"([\d.]+)"',
+                r'"regularPrice"\s*:\s*([\d.]+)',
+                r'"originalPrice"\s*:\s*"([\d.]+)"',
+                r'"listPrice"\s*:\s*"([\d.]+)"',
+                r'"compareAtPrice"\s*:\s*"([\d.]+)"',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, script)
+                if match:
+                    price_str = match.group(1).replace(',', '')
+                    try:
+                        price = Decimal(price_str)
+                        if price > 0:
+                            return price
+                    except:
+                        continue
+        
+        # Look for struck-through prices in HTML
+        original_selectors = [
+            '[class*="original"]::text',
+            '[class*="Original"]::text',
+            '[class*="regular"]::text',
+            '[class*="Regular"]::text',
+            'del::text',
+            's::text',
+            '[class*="strike"]::text',
+            '[class*="compare"]::text',
+        ]
+        
+        for selector in original_selectors:
+            price_text = response.css(selector).get()
+            if price_text:
+                price = self._decimal(price_text)
+                if price:
+                    return price
+        
+        return None
 
 
 class GapSpider(RetailerSaleSpider):
