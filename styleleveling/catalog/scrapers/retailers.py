@@ -5,6 +5,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import scrapy
 
+from catalog.scrapers.fashion_filter import fashion_product_decision
+
 
 class RetailerSaleSpider(scrapy.Spider):
     """Base spider for public sale pages with product detail links.
@@ -461,6 +463,8 @@ class Forever21Spider(RetailerSaleSpider):
 
 
 class AsosSpider(RetailerSaleSpider):
+    """Import wearable ASOS sale items while excluding its Face + Body range."""
+
     name = "asos"
     store_name = "ASOS"
     store_url = "https://www.asos.com/us/"
@@ -473,3 +477,49 @@ class AsosSpider(RetailerSaleSpider):
 
     def is_product_url(self, url):
         return "/prd/" in urlsplit(url).path
+
+    def parse_product(self, response, sale_audience):
+        # ASOS mixes clothing and beauty items in the same sale catalog. The
+        # product description provides stronger type evidence than the listing
+        # page, so filtering happens here immediately before yielding an item.
+        description = " ".join(
+            text.strip()
+            for text in response.css(
+                '[data-testid="product-description"] ::text, '
+                'meta[name="description"]::attr(content), '
+                'meta[property="og:description"]::attr(content)'
+            ).getall()
+            if text.strip()
+        )
+
+        # ASOS keeps the reliable USD sale/original values in embedded product
+        # data rather than JSON-LD. Capture the first variant's price pair.
+        price_match = re.search(
+            r'"price":\{"current":\{"value":(?P<current>\d+(?:\.\d+)?)'
+            r'.*?"previous":\{"value":(?P<previous>\d+(?:\.\d+)?)',
+            response.text,
+            flags=re.DOTALL,
+        )
+
+        for item in super().parse_product(response, sale_audience):
+            accepted, reason = fashion_product_decision(
+                item["product_name"],
+                item["category"],
+                description,
+            )
+            if not accepted:
+                self.logger.info(
+                    "Rejected non-fashion ASOS product (%s): %s",
+                    reason,
+                    item["product_name"],
+                )
+                continue
+
+            if price_match:
+                current_price = self._decimal(price_match.group("current"))
+                previous_price = self._decimal(price_match.group("previous"))
+                if current_price is not None:
+                    item["current_price"] = current_price
+                if previous_price is not None and previous_price >= item["current_price"]:
+                    item["original_price"] = previous_price
+            yield item

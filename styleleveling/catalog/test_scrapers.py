@@ -6,6 +6,7 @@ from scrapy.http import HtmlResponse, Request
 from .models import Listing, PriceHistory, Store
 from .scrapers.cotton_on import CottonOnSpider
 from .scrapers.middlewares import StyleLevelingHeadersMiddleware
+from .scrapers.fashion_filter import fashion_product_decision
 from .scrapers.pipelines import DjangoCatalogPipeline
 from .scrapers.retailers import AsosSpider, Forever21Spider, HMSpider, UniqloSpider
 
@@ -148,8 +149,55 @@ class StyleLevelingHeadersMiddlewareTests(TestCase):
         )
         middleware = StyleLevelingHeadersMiddleware()
 
-        middleware.process_request(request, CottonOnSpider())
+        middleware.process_request(request)
 
         self.assertIn(b"text/html", request.headers[b"Accept"])
         self.assertEqual(request.headers[b"Accept-Language"], b"en-US,en;q=0.9")
         self.assertEqual(request.headers[b"Cache-Control"], b"max-age=0")
+
+
+class FashionProductFilterTests(TestCase):
+    def test_accepts_clothing_shoes_and_accessories(self):
+        self.assertTrue(fashion_product_decision("Oversized graphic T-shirt")[0])
+        self.assertTrue(fashion_product_decision("Leather platform sneakers")[0])
+        self.assertTrue(fashion_product_decision("Mini shoulder bag")[0])
+
+    def test_rejects_asos_face_and_body_products(self):
+        self.assertFalse(
+            fashion_product_decision("Cetaphil Daily Defense Cream SPF50 50g")[0]
+        )
+        self.assertFalse(
+            fashion_product_decision("Frank Body Glycolic Body Scrub 250g")[0]
+        )
+
+    def test_rejects_uncertain_products(self):
+        self.assertFalse(fashion_product_decision("Mystery sale item")[0])
+
+    def test_asos_uses_embedded_sale_and_original_prices(self):
+        html = '''
+          <html><head>
+            <script type="application/ld+json">{
+              "@type":"Product", "name":"Oversized graphic T-shirt",
+              "sku":"209960761", "category":"T-Shirts",
+              "offers":{"price":"80.00"}
+            }</script>
+          </head><body>
+            <script>
+              window.data = {"price":{"current":{"value":64,"text":"$64.00"},
+              "previous":{"value":80,"text":"$80.00"},"currency":"USD"}};
+            </script>
+          </body></html>
+        '''
+        spider = AsosSpider()
+        url = "https://www.asos.com/us/asos-design/graphic-t-shirt/prd/209960761"
+        response = HtmlResponse(
+            url=url,
+            request=Request(url=url),
+            body=html,
+            encoding="utf-8",
+        )
+
+        items = list(spider.parse_product(response, "men"))
+
+        self.assertEqual(items[0]["current_price"], Decimal("64.00"))
+        self.assertEqual(items[0]["original_price"], Decimal("80.00"))

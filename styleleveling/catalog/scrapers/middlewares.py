@@ -30,7 +30,7 @@ class StyleLevelingHeadersMiddleware:
 
         return cls()
 
-    def process_request(self, request, spider):
+    def process_request(self, request):
         """Apply safe defaults immediately before Scrapy downloads a request."""
 
         for name, value in self.DEFAULT_HEADERS.items():

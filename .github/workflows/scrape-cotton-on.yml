@@ -3,11 +3,18 @@ name: Import retailer sale deals
 on:
   workflow_dispatch:
   schedule:
+    # Run once per day at 08:17 UTC.
     - cron: "17 8 * * *"
 
+# Prevent two complete import workflows from overlapping. Matrix jobs inside
+# one workflow may still run together, but a second scheduled/manual run waits.
 concurrency:
   group: retailer-sale-import
   cancel-in-progress: false
+
+# The importer only needs to read the repository source.
+permissions:
+  contents: read
 
 jobs:
   scrape:
@@ -15,30 +22,68 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     continue-on-error: ${{ matrix.allow_failure }}
+
     strategy:
       fail-fast: false
+      # Limit simultaneous database connections and retailer traffic.
+      max-parallel: 3
       matrix:
         include:
+          # These stores are expected to expose usable public product data.
           - {store: cotton_on, allow_failure: false}
           - {store: pacsun, allow_failure: false}
           - {store: hm, allow_failure: false}
           - {store: uniqlo, allow_failure: false}
-          - {store: forever21, allow_failure: false}
           - {store: asos, allow_failure: false}
+          - {store: forever21, allow_failure: false}
+
+          # These stores may return access blocks or incomplete client-rendered
+          # pages. Keep the jobs visible without failing the complete workflow.
           - {store: gap, allow_failure: true}
           - {store: hollister, allow_failure: true}
           - {store: urban_outfitters, allow_failure: true}
+
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ALLOWED_HOSTS: localhost
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
-      - name: Verify database secret
-        run: test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL repository secret" && exit 1)
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # Never fall back to SQLite here. A SQLite import exists only on the
+      # temporary GitHub runner and cannot appear in Django Admin or the site.
+      - name: Verify live database configuration
+        shell: bash
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL repository secret is missing."
+            exit 1
+          fi
+
+          vendor=$(python styleleveling/manage.py shell -c \
+            "from django.db import connection; print(connection.vendor)" | tail -n 1)
+
+          if [ "$vendor" != "postgresql" ]; then
+            echo "Expected PostgreSQL but Django reported: $vendor"
+            exit 1
+          fi
+
+      # Database migrations belong to the Render deployment. Running migrate
+      # in every matrix job could make several jobs migrate simultaneously.
       - name: Import retailer and verify products
-        run: python styleleveling/manage.py scrape_sales --stores "${{ matrix.store }}" --minimum-successful-stores 1
+        run: |
+          python styleleveling/manage.py scrape_sales \
+            --stores "${{ matrix.store }}" \
+            --minimum-successful-stores 1

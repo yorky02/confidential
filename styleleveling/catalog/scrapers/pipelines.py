@@ -4,6 +4,7 @@ from scrapy import signals
 
 from catalog.models import Listing, ListingImage, PriceHistory, Product, Store, SyncRun
 from catalog.classification import classify_category
+from catalog.scrapers.fashion_filter import fashion_product_decision
 
 
 class DjangoCatalogPipeline:
@@ -28,6 +29,21 @@ class DjangoCatalogPipeline:
         )
         self.sync_run = SyncRun.objects.create(store=self.store)
         self.listings_found = 0
+
+        if spider.name == "asos":
+            # Remove mixed-catalog products imported by older ASOS spider
+            # versions before the new filtered results become visible.
+            for listing in Listing.objects.filter(
+                store=self.store,
+                is_promo_active=True,
+            ).select_related("product"):
+                accepted, _ = fashion_product_decision(
+                    listing.product.product_name,
+                    listing.product.source_category,
+                )
+                if not accepted:
+                    listing.is_promo_active = False
+                    listing.save(update_fields=["is_promo_active"])
 
     @transaction.atomic
     def process_item(self, item):
