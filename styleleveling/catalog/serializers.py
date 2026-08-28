@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import Listing, ListingImage, ListingReview, Membership, SavedDeal, StoreRequest
+from .models import Listing, ListingImage, ListingReview, Membership, SavedDeal, Store, StoreRequest
 
 
 class ListingReviewSerializer(serializers.ModelSerializer):
@@ -38,6 +38,14 @@ class StoreRequestSerializer(serializers.ModelSerializer):
         model = StoreRequest
         fields = ["id", "store_name", "website_url", "reason", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+
+class StoreSerializer(serializers.ModelSerializer):
+    listing_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Store
+        fields = ["id", "store_name", "website_url", "listing_count"]
 
 
 class ListingImageSerializer(serializers.ModelSerializer):

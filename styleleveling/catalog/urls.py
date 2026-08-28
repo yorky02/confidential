@@ -10,12 +10,14 @@ from .views import (
     SavedDealDestroyView,
     ListingReviewListCreateView,
     StoreRequestCreateView,
+    StoreListView,
     catalog,
 )
 
 urlpatterns = [
     path('function', views.catalog),
     path('listings/', ListingListView.as_view(), name="listing-list"),
+    path('stores/', StoreListView.as_view(), name="store-list"),
     path('listings/<int:pk>/', ListingDetailView.as_view(), name='listing-detail'),
     path('members/signup/', MemberSignupView.as_view(), name='member-signup'),
     path('members/login/', obtain_auth_token, name='member-login'),

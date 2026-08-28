@@ -1,18 +1,20 @@
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.db.models import Count, Q
 from rest_framework import generics, filters
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Listing, ListingReview, SavedDeal, StoreRequest
+from .models import Listing, ListingReview, SavedDeal, Store, StoreRequest
 from .serializers import (
     ListingSerializer,
     MemberSignupSerializer,
     SavedDealSerializer,
     ListingReviewSerializer,
     StoreRequestSerializer,
+    StoreSerializer,
 )
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -66,9 +68,42 @@ class ListingListView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         if not self.member_has_full_access():
-            queryset = queryset[:100]
+            if request.query_params.get("ordering") or request.query_params.get("store"):
+                serializer = self.get_serializer(queryset[:100], many=True)
+                return Response(serializer.data)
+            store_ids = list(
+                queryset.order_by().values_list("store_id", flat=True).distinct()
+            )
+            store_rows = {
+                store_id: list(queryset.filter(store_id=store_id)[:100])
+                for store_id in store_ids
+            }
+            queryset = []
+            while len(queryset) < 100 and any(store_rows.values()):
+                for store_id in store_ids:
+                    if store_rows[store_id] and len(queryset) < 100:
+                        queryset.append(store_rows[store_id].pop(0))
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class StoreListView(generics.ListAPIView):
+    serializer_class = StoreSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return (
+            Store.objects.filter(is_active=True, is_guest_visible=True)
+            .annotate(
+                listing_count=Count(
+                    "listing",
+                    filter=Q(listing__is_promo_active=True),
+                    distinct=True,
+                )
+            )
+            .filter(listing_count__gt=0)
+            .order_by("store_name")
+        )
 
 class ListingDetailView(generics.RetrieveAPIView):
     serializer_class = ListingSerializer

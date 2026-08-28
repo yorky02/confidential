@@ -52,3 +52,11 @@ temporary database.
   limits requests per domain, and uses automatic throttling.
 - If a retailer returns an access block or changes its HTML, that store's run
   records the problem instead of attempting to bypass the restriction.
+
+## Public catalog behavior
+
+- `GET /api/stores/` returns every active, guest-visible retailer that currently
+  has an active promotion.
+- The 100-deal guest feed is distributed across visible retailers instead of
+  allowing one retailer to fill the complete response.
+- Authenticated members with full access continue to receive the complete feed.

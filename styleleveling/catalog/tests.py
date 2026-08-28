@@ -438,6 +438,51 @@ class DealPlatformFeatureTests(APITestCase):
         response = self.client.get(reverse("listing-list"))
         self.assertEqual(len(response.data), 100)
 
+    def test_guest_feed_is_balanced_across_visible_stores(self):
+        second_store = Store.objects.create(
+            store_name="Second Public Store",
+            website_url="https://second.example.com",
+            is_guest_visible=True,
+        )
+        Listing.objects.bulk_create([
+            Listing(
+                store=self.public_store,
+                product=self.product,
+                external_product_id=f"PUBLIC-{number}",
+                product_page_url=f"https://public.example.com/{number}",
+                current_price=Decimal("1.00"),
+                is_promo_active=True,
+            )
+            for number in range(105)
+        ])
+        Listing.objects.create(
+            store=second_store,
+            product=self.product,
+            external_product_id="SECOND-1",
+            product_page_url="https://second.example.com/1",
+            current_price=Decimal("99.00"),
+            is_promo_active=True,
+        )
+
+        response = self.client.get(reverse("listing-list"))
+
+        self.assertEqual(len(response.data), 100)
+        self.assertIn("Second Public Store", {row["store_name"] for row in response.data})
+
+    def test_store_list_returns_visible_stores_with_active_deals(self):
+        response = self.client.get(reverse("store-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            [{
+                "id": self.public_store.id,
+                "store_name": "Public Store",
+                "website_url": "https://public.example.com",
+                "listing_count": 1,
+            }],
+        )
+
     def test_listing_api_returns_multiple_images(self):
         response = self.client.get(reverse("listing-detail", args=[self.public_listing.id]))
         self.assertEqual(
