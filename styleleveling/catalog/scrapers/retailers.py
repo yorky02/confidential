@@ -311,7 +311,29 @@ class RetailerSaleSpider(scrapy.Spider):
         return str(brand or self.store_name)
 
 
-# ====== SPIDER CLASSES ======
+# ====== COTTON ON SPIDER ======
+
+class CottonOnSpider(RetailerSaleSpider):
+    name = "cotton_on"
+    store_name = "Cotton On"
+    store_url = "https://cottonon.com/US/"
+    allowed_domains = ["cottonon.com", "www.cottonon.com"]
+    sale_pages = {
+        "women": "https://cottonon.com/US/sale/women/",
+        "men": "https://cottonon.com/US/sale/men/",
+    }
+    product_link_selectors = (
+        'a[href*="/p/"]::attr(href)',
+        '.product-tile a::attr(href)',
+        '[data-testid*="product"] a::attr(href)',
+    )
+    
+    def is_product_url(self, url):
+        path = urlsplit(url).path
+        return "/p/" in path and "sale" not in path
+
+
+# ====== PAC SUN SPIDER ======
 
 class PacSunSpider(RetailerSaleSpider):
     name = "pacsun"
@@ -340,69 +362,206 @@ class PacSunSpider(RetailerSaleSpider):
         return path.endswith(".html") and "/sale/" not in path
 
 
-class HollisterSpider(RetailerSaleSpider):
-    name = "hollister"
-    store_name = "Hollister"
-    store_url = "https://www.hollisterco.com/shop/us/"
-    allowed_domains = ["hollisterco.com", "www.hollisterco.com"]
+# ====== GAP SPIDER ======
+
+class GapSpider(RetailerSaleSpider):
+    name = "gap"
+    store_name = "Gap"
+    store_url = "https://www.gap.com/"
+    allowed_domains = ["gap.com", "www.gap.com"]
     sale_pages = {
-        "men": "https://www.hollisterco.com/shop/us/mens-clearance",
-        "women": "https://www.hollisterco.com/shop/us/womens-clearance",
+        "men": "https://www.gap.com/browse/men/sale?cid=65289&department=75",
+        "women": "https://www.gap.com/browse/women/sale?cid=65179&department=136",
     }
     product_link_selectors = (
-        'a[href*="/shop/us/p/"]::attr(href)',
-        '[data-testid*="product"] a::attr(href)',
-        '.product-tile a::attr(href)',
+        'a[href*="/browse/product.do"]::attr(href)',
+        '[data-testid*="product-card"] a::attr(href)',
+        '.product-card a::attr(href)',
     )
 
     def is_product_url(self, url):
-        return "/shop/us/p/" in urlsplit(url).path
-    
-    def parse_sale_page(self, response, audience, page_number):
-        """Use Selenium if blocked."""
-        if response.status == 403:
-            self.logger.error("Hollister blocked with HTTP 403, using Selenium...")
-            time.sleep(random.uniform(10, 20))
-            yield scrapy.Request(
-                response.url,
-                callback=self.parse_sale_page_with_selenium,
-                cb_kwargs={"audience": audience, "page_number": page_number},
-                dont_filter=True,
-                meta={'use_selenium': True},
-            )
-            return
-        yield from super().parse_sale_page(response, audience, page_number)
-    
-    def parse_sale_page_with_selenium(self, response, audience, page_number):
-        """Parse sale page with Selenium."""
-        driver = None
-        try:
-            options = Options()
-            options.add_argument('--headless')
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.set_preference("general.useragent.override",
+        return "/browse/product.do" in urlsplit(url).path
 
 
-class UrbanOutfittersSpider(RetailerSaleSpider):
-    name = "urban_outfitters"
-    store_name = "Urban Outfitters"
-    store_url = "https://www.urbanoutfitters.com/"
-    allowed_domains = ["urbanoutfitters.com", "www.urbanoutfitters.com"]
+# ====== ASOS SPIDER ======
+
+class AsosSpider(RetailerSaleSpider):
+    name = "asos"
+    store_name = "ASOS"
+    store_url = "https://www.asos.com/us/"
+    allowed_domains = ["asos.com", "www.asos.com"]
     sale_pages = {
-        "men": "https://www.urbanoutfitters.com/mens-clothing-sale",
-        "women": "https://www.urbanoutfitters.com/womens-clothing-sale",
+        "men": "https://www.asos.com/us/men/sale/cat/?cid=8409",
+        "women": "https://www.asos.com/us/women/sale/cat/?cid=7046",
+    }
+    product_link_selectors = ('a[href*="/prd/"]::attr(href)',)
+
+    def is_product_url(self, url):
+        return "/prd/" in urlsplit(url).path
+
+
+# ====== FOREVER 21 SPIDER ======
+
+class Forever21Spider(RetailerSaleSpider):
+    name = "forever21"
+    store_name = "Forever 21"
+    store_url = "https://www.forever21.com/"
+    allowed_domains = ["forever21.com", "www.forever21.com"]
+    sale_pages = {
+        "men": "https://www.forever21.com/collections/mens-sale",
+        "women": "https://www.forever21.com/collections/womens-sale",
     }
     product_link_selectors = (
-        'a[href*="/shop/"]::attr(href)',
-        '[data-testid*="product"] a::attr(href)',
-        '.product-tile a::attr(href)',
+        'a[href*="/products/"]::attr(href)',
+        'a[href*="/product/"]::attr(href)',
     )
 
     def is_product_url(self, url):
         path = urlsplit(url).path
-        return path.startswith("/shop/") and "sale" not in path
+        return "/products/" in path or "/product/" in path
 
+
+# ====== UNIQLO SPIDER ======
+
+class UniqloSpider(RetailerSaleSpider):
+    name = "uniqlo"
+    store_name = "Uniqlo"
+    store_url = "https://www.uniqlo.com/us/en/"
+    allowed_domains = ["uniqlo.com", "www.uniqlo.com"]
+    sale_pages = {
+        "women": "https://www.uniqlo.com/us/en/feature/sale/women",
+        "men": "https://www.uniqlo.com/us/en/feature/sale/men",
+    }
+    product_link_selectors = (
+        'a.product-tile__link::attr(href)',
+        'a[href*="/products/"]::attr(href)',
+        '.product-tile a::attr(href)',
+    )
+
+    def is_product_url(self, url):
+        return "/us/en/products/" in urlsplit(url).path or "/products/" in urlsplit(url).path
+
+    def parse_sale_page(self, response, audience, page_number):
+        if response.status == 403:
+            self.logger.error("Uniqlo blocked with HTTP 403")
+            time.sleep(random.uniform(10, 30))
+            return
+
+        links = []
+        for selector in self.product_link_selectors:
+            links.extend(response.css(selector).getall())
+
+        clean_links = []
+        for link in links:
+            absolute = response.urljoin(link)
+            if self.is_product_url(absolute) and absolute not in clean_links:
+                clean_links.append(absolute)
+
+        if not clean_links:
+            self.logger.error("No product links found on %s", response.url)
+            alt_links = response.css('a[href*="product"]::attr(href)').getall()
+            for link in alt_links:
+                absolute = response.urljoin(link)
+                if self.is_product_url(absolute) and absolute not in clean_links:
+                    clean_links.append(absolute)
+
+        for idx, product_url in enumerate(clean_links):
+            if idx > 0:
+                time.sleep(random.uniform(1.0, 3.0))
+            yield scrapy.Request(
+                product_url,
+                callback=self.parse_product,
+                cb_kwargs={"sale_audience": audience},
+                errback=self.request_failed,
+                dont_filter=True,
+            )
+
+        next_url = self.next_page_url(response, page_number)
+        if next_url and (self.max_pages is None or page_number < self.max_pages):
+            time.sleep(random.uniform(2.0, 5.0))
+            yield response.follow(
+                next_url,
+                callback=self.parse_sale_page,
+                cb_kwargs={"audience": audience, "page_number": page_number + 1},
+                errback=self.request_failed,
+                dont_filter=True,
+            )
+
+    def parse_product(self, response, sale_audience):
+        state = None
+        for raw in response.css("script::text").getall():
+            marker = "window.__PRELOADED_STATE__ ="
+            if marker not in raw:
+                continue
+            payload = raw.split(marker, 1)[1].strip().rstrip(";").strip()
+            try:
+                state = json.loads(payload)
+            except json.JSONDecodeError:
+                pass
+            break
+
+        product_id = self.external_id_from_url(response.url)
+
+        def find_product(value):
+            if isinstance(value, dict):
+                if str(value.get("productId", "")).endswith(product_id.replace("E", "")):
+                    return value
+                if value.get("productId") == product_id:
+                    return value
+                for child in value.values():
+                    found = find_product(child)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for child in value:
+                    found = find_product(child)
+                    if found:
+                        return found
+            return None
+
+        product = find_product(state) if state else None
+        if not product:
+            yield from super().parse_product(response, sale_audience)
+            return
+
+        prices = product.get("prices") or {}
+        base = self._decimal((prices.get("base") or {}).get("value"))
+        promo = self._decimal((prices.get("promo") or {}).get("value"))
+        current_price = promo or base
+        original_price = base or current_price
+        if current_price is None:
+            self.logger.warning("Skipping Uniqlo product without a price: %s", response.url)
+            return
+
+        image_urls = []
+        def collect_images(value):
+            if isinstance(value, dict):
+                for child in value.values():
+                    collect_images(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_images(child)
+            elif isinstance(value, str) and value.startswith("https://image.uniqlo.com/"):
+                clean = self._clean_image_url(value)
+                if clean not in image_urls:
+                    image_urls.append(clean)
+
+        collect_images(product.get("images") or product)
+        canonical = response.css('link[rel="canonical"]::attr(href)').get() or response.url
+        yield {
+            "external_product_id": str(product.get("productId") or product_id)[:50],
+            "product_name": " ".join(str(product.get("name") or "Uniqlo item").split()),
+            "brand_name": "Uniqlo",
+            "category": self._breadcrumb(response) or "Clothing",
+            "audience": sale_audience,
+            "product_page_url": canonical,
+            "current_price": current_price,
+            "original_price": original_price,
+            "image_urls": image_urls[:12],
+        }
+
+
+# ====== H&M SPIDER (with Selenium) ======
 
 class HMSpider(RetailerSaleSpider):
     name = "hm"
@@ -545,194 +704,44 @@ class HMSpider(RetailerSaleSpider):
                 driver.quit()
 
 
-class GapSpider(RetailerSaleSpider):
-    name = "gap"
-    store_name = "Gap"
-    store_url = "https://www.gap.com/"
-    allowed_domains = ["gap.com", "www.gap.com"]
+# ====== HOLLISTER SPIDER (Simplified - No Selenium) ======
+
+class HollisterSpider(RetailerSaleSpider):
+    name = "hollister"
+    store_name = "Hollister"
+    store_url = "https://www.hollisterco.com/shop/us/"
+    allowed_domains = ["hollisterco.com", "www.hollisterco.com"]
     sale_pages = {
-        "men": "https://www.gap.com/browse/men/sale?cid=65289&department=75",
-        "women": "https://www.gap.com/browse/women/sale?cid=65179&department=136",
+        "men": "https://www.hollisterco.com/shop/us/mens-clearance",
+        "women": "https://www.hollisterco.com/shop/us/womens-clearance",
     }
     product_link_selectors = (
-        'a[href*="/browse/product.do"]::attr(href)',
-        '[data-testid*="product-card"] a::attr(href)',
-        '.product-card a::attr(href)',
-    )
-
-    def is_product_url(self, url):
-        return "/browse/product.do" in urlsplit(url).path
-
-
-class UniqloSpider(RetailerSaleSpider):
-    name = "uniqlo"
-    store_name = "Uniqlo"
-    store_url = "https://www.uniqlo.com/us/en/"
-    allowed_domains = ["uniqlo.com", "www.uniqlo.com"]
-    sale_pages = {
-        "women": "https://www.uniqlo.com/us/en/feature/sale/women",
-        "men": "https://www.uniqlo.com/us/en/feature/sale/men",
-    }
-    product_link_selectors = (
-        'a.product-tile__link::attr(href)',
-        'a[href*="/products/"]::attr(href)',
+        'a[href*="/shop/us/p/"]::attr(href)',
+        '[data-testid*="product"] a::attr(href)',
         '.product-tile a::attr(href)',
     )
 
     def is_product_url(self, url):
-        return "/us/en/products/" in urlsplit(url).path or "/products/" in urlsplit(url).path
-
-    def parse_sale_page(self, response, audience, page_number):
-        """Override to handle Uniqlo's specific structure."""
-        if response.status == 403:
-            self.logger.error("Uniqlo blocked with HTTP 403")
-            time.sleep(random.uniform(10, 30))
-            return
-
-        links = []
-        for selector in self.product_link_selectors:
-            links.extend(response.css(selector).getall())
-
-        clean_links = []
-        for link in links:
-            absolute = response.urljoin(link)
-            if self.is_product_url(absolute) and absolute not in clean_links:
-                clean_links.append(absolute)
-
-        if not clean_links:
-            self.logger.error("No product links found on %s", response.url)
-            # Try alternative selectors for Uniqlo
-            alt_links = response.css('a[href*="product"]::attr(href)').getall()
-            for link in alt_links:
-                absolute = response.urljoin(link)
-                if self.is_product_url(absolute) and absolute not in clean_links:
-                    clean_links.append(absolute)
-
-        for idx, product_url in enumerate(clean_links):
-            if idx > 0:
-                time.sleep(random.uniform(1.0, 3.0))
-            yield scrapy.Request(
-                product_url,
-                callback=self.parse_product,
-                cb_kwargs={"sale_audience": audience},
-                errback=self.request_failed,
-                dont_filter=True,
-            )
-
-        next_url = self.next_page_url(response, page_number)
-        if next_url and (self.max_pages is None or page_number < self.max_pages):
-            time.sleep(random.uniform(2.0, 5.0))
-            yield response.follow(
-                next_url,
-                callback=self.parse_sale_page,
-                cb_kwargs={"audience": audience, "page_number": page_number + 1},
-                errback=self.request_failed,
-                dont_filter=True,
-            )
-
-    def parse_product(self, response, sale_audience):
-        state = None
-        for raw in response.css("script::text").getall():
-            marker = "window.__PRELOADED_STATE__ ="
-            if marker not in raw:
-                continue
-            payload = raw.split(marker, 1)[1].strip().rstrip(";").strip()
-            try:
-                state = json.loads(payload)
-            except json.JSONDecodeError:
-                pass
-            break
-
-        product_id = self.external_id_from_url(response.url)
-
-        def find_product(value):
-            if isinstance(value, dict):
-                if str(value.get("productId", "")).endswith(product_id.replace("E", "")):
-                    return value
-                if value.get("productId") == product_id:
-                    return value
-                for child in value.values():
-                    found = find_product(child)
-                    if found:
-                        return found
-            elif isinstance(value, list):
-                for child in value:
-                    found = find_product(child)
-                    if found:
-                        return found
-            return None
-
-        product = find_product(state) if state else None
-        if not product:
-            yield from super().parse_product(response, sale_audience)
-            return
-
-        prices = product.get("prices") or {}
-        base = self._decimal((prices.get("base") or {}).get("value"))
-        promo = self._decimal((prices.get("promo") or {}).get("value"))
-        current_price = promo or base
-        original_price = base or current_price
-        if current_price is None:
-            self.logger.warning("Skipping Uniqlo product without a price: %s", response.url)
-            return
-
-        image_urls = []
-        def collect_images(value):
-            if isinstance(value, dict):
-                for child in value.values():
-                    collect_images(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect_images(child)
-            elif isinstance(value, str) and value.startswith("https://image.uniqlo.com/"):
-                clean = self._clean_image_url(value)
-                if clean not in image_urls:
-                    image_urls.append(clean)
-
-        collect_images(product.get("images") or product)
-        canonical = response.css('link[rel="canonical"]::attr(href)').get() or response.url
-        yield {
-            "external_product_id": str(product.get("productId") or product_id)[:50],
-            "product_name": " ".join(str(product.get("name") or "Uniqlo item").split()),
-            "brand_name": "Uniqlo",
-            "category": self._breadcrumb(response) or "Clothing",
-            "audience": sale_audience,
-            "product_page_url": canonical,
-            "current_price": current_price,
-            "original_price": original_price,
-            "image_urls": image_urls[:12],
-        }
+        return "/shop/us/p/" in urlsplit(url).path
 
 
-class Forever21Spider(RetailerSaleSpider):
-    name = "forever21"
-    store_name = "Forever 21"
-    store_url = "https://www.forever21.com/"
-    allowed_domains = ["forever21.com", "www.forever21.com"]
+# ====== URBAN OUTFITTERS SPIDER (Simplified - No Selenium) ======
+
+class UrbanOutfittersSpider(RetailerSaleSpider):
+    name = "urban_outfitters"
+    store_name = "Urban Outfitters"
+    store_url = "https://www.urbanoutfitters.com/"
+    allowed_domains = ["urbanoutfitters.com", "www.urbanoutfitters.com"]
     sale_pages = {
-        "men": "https://www.forever21.com/collections/mens-sale",
-        "women": "https://www.forever21.com/collections/womens-sale",
+        "men": "https://www.urbanoutfitters.com/mens-clothing-sale",
+        "women": "https://www.urbanoutfitters.com/womens-clothing-sale",
     }
     product_link_selectors = (
-        'a[href*="/products/"]::attr(href)',
-        'a[href*="/product/"]::attr(href)',
+        'a[href*="/shop/"]::attr(href)',
+        '[data-testid*="product"] a::attr(href)',
+        '.product-tile a::attr(href)',
     )
 
     def is_product_url(self, url):
         path = urlsplit(url).path
-        return "/products/" in path or "/product/" in path
-
-
-class AsosSpider(RetailerSaleSpider):
-    name = "asos"
-    store_name = "ASOS"
-    store_url = "https://www.asos.com/us/"
-    allowed_domains = ["asos.com", "www.asos.com"]
-    sale_pages = {
-        "men": "https://www.asos.com/us/men/sale/cat/?cid=8409",
-        "women": "https://www.asos.com/us/women/sale/cat/?cid=7046",
-    }
-    product_link_selectors = ('a[href*="/prd/"]::attr(href)',)
-
-    def is_product_url(self, url):
-        return "/prd/" in urlsplit(url).path
+        return path.startswith("/shop/") and "sale" not in path
