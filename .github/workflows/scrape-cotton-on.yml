@@ -31,17 +31,13 @@ jobs:
         include:
           # These stores are expected to expose usable public product data.
           - {store: cotton_on, allow_failure: false}
-          - {store: pacsun, allow_failure: false}
-          - {store: hm, allow_failure: false}
-          - {store: uniqlo, allow_failure: false}
-          - {store: asos, allow_failure: false}
           - {store: forever21, allow_failure: false}
-
-          # These stores may return access blocks or incomplete client-rendered
-          # pages. Keep the jobs visible without failing the complete workflow.
-          - {store: gap, allow_failure: true}
-          - {store: hollister, allow_failure: true}
-          - {store: urban_outfitters, allow_failure: true}
+          # Keep ASOS isolated so a temporary retailer block does not prevent
+          # the other verified stores from completing their imports.
+          - {store: asos, allow_failure: true}
+          - {store: adidas, allow_failure: false}
+          - {store: columbia, allow_failure: false}
+          - {store: nike, allow_failure: false}
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

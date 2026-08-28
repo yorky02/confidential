@@ -132,6 +132,7 @@ class RetailerSaleSpider(scrapy.Spider):
             or self._first_text(
                 response,
                 [
+                    '[data-testid="original-price"] *::text',
                     '[class*="original-price"]::text',
                     '[class*="OriginalPrice"]::text',
                     '[class*="strike"]::text',
@@ -523,3 +524,81 @@ class AsosSpider(RetailerSaleSpider):
                 if previous_price is not None and previous_price >= item["current_price"]:
                     item["original_price"] = previous_price
             yield item
+
+
+class FashionSaleSpider(RetailerSaleSpider):
+    """Shared product-page filter for retailers with mixed sale inventories."""
+
+    def parse_product(self, response, sale_audience):
+        description = " ".join(
+            text.strip()
+            for text in response.css(
+                'meta[name="description"]::attr(content), '
+                'meta[property="og:description"]::attr(content)'
+            ).getall()
+            if text.strip()
+        )
+        for item in super().parse_product(response, sale_audience):
+            accepted, reason = fashion_product_decision(
+                item["product_name"], item["category"], description
+            )
+            if accepted:
+                yield item
+            else:
+                self.logger.info(
+                    "Rejected non-fashion %s product (%s): %s",
+                    self.store_name,
+                    reason,
+                    item["product_name"],
+                )
+
+
+class AdidasSpider(FashionSaleSpider):
+    name = "adidas"
+    store_name = "Adidas"
+    store_url = "https://www.adidas.com/us/"
+    allowed_domains = ["adidas.com", "www.adidas.com"]
+    sale_pages = {
+        "men": "https://www.adidas.com/us/men-sale",
+        "women": "https://www.adidas.com/us/women-sale",
+    }
+    product_link_selectors = ('a[href*="/us/"][href*=".html"]::attr(href)',)
+
+    def is_product_url(self, url):
+        path = urlsplit(url).path
+        return path.startswith("/us/") and path.endswith(".html") and "-sale" not in path
+
+    @staticmethod
+    def external_id_from_url(url):
+        return urlsplit(url).path.rsplit("/", 1)[-1].removesuffix(".html")[:50]
+
+
+class ColumbiaSpider(FashionSaleSpider):
+    name = "columbia"
+    store_name = "Columbia"
+    store_url = "https://www.columbia.com/"
+    allowed_domains = ["columbia.com", "www.columbia.com"]
+    sale_pages = {
+        "men": "https://www.columbia.com/c/mens-clothing-sale/",
+        "women": "https://www.columbia.com/c/womens-clothing-sale/",
+    }
+    product_link_selectors = ('a[href*="/p/"][href*=".html"]::attr(href)',)
+
+    def is_product_url(self, url):
+        path = urlsplit(url).path
+        return path.startswith("/p/") and path.endswith(".html")
+
+
+class NikeSpider(FashionSaleSpider):
+    name = "nike"
+    store_name = "Nike"
+    store_url = "https://www.nike.com/"
+    allowed_domains = ["nike.com", "www.nike.com"]
+    sale_pages = {
+        "men": "https://www.nike.com/w/mens-sale-3yaepznik1",
+        "women": "https://www.nike.com/w/womens-sale-3yaepz5e1x6",
+    }
+    product_link_selectors = ('a[href*="/t/"]::attr(href)',)
+
+    def is_product_url(self, url):
+        return urlsplit(url).path.startswith("/t/")

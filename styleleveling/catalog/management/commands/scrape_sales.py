@@ -5,14 +5,11 @@ from scrapy.utils.project import get_project_settings
 
 from catalog.scrapers.cotton_on import CottonOnSpider
 from catalog.scrapers.retailers import (
+    AdidasSpider,
     AsosSpider,
+    ColumbiaSpider,
     Forever21Spider,
-    GapSpider,
-    HMSpider,
-    HollisterSpider,
-    PacSunSpider,
-    UniqloSpider,
-    UrbanOutfittersSpider,
+    NikeSpider,
 )
 from catalog.models import SyncRun
 
@@ -21,14 +18,11 @@ SPIDERS = {
     # Command-line keys map to spider classes. Keeping the registry here makes
     # validation, workflow selection, and the ``all`` option deterministic.
     "cotton_on": CottonOnSpider,
-    "pacsun": PacSunSpider,
-    "hollister": HollisterSpider,
-    "urban_outfitters": UrbanOutfittersSpider,
-    "hm": HMSpider,
-    "gap": GapSpider,
-    "uniqlo": UniqloSpider,
     "forever21": Forever21Spider,
     "asos": AsosSpider,
+    "adidas": AdidasSpider,
+    "columbia": ColumbiaSpider,
+    "nike": NikeSpider,
 }
 
 

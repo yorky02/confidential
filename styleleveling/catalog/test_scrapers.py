@@ -8,7 +8,15 @@ from .scrapers.cotton_on import CottonOnSpider
 from .scrapers.middlewares import StyleLevelingHeadersMiddleware
 from .scrapers.fashion_filter import fashion_product_decision
 from .scrapers.pipelines import DjangoCatalogPipeline
-from .scrapers.retailers import AsosSpider, Forever21Spider, HMSpider, UniqloSpider
+from .scrapers.retailers import (
+    AdidasSpider,
+    AsosSpider,
+    ColumbiaSpider,
+    Forever21Spider,
+    HMSpider,
+    NikeSpider,
+    UniqloSpider,
+)
 
 
 class CottonOnSpiderTests(TestCase):
@@ -201,3 +209,36 @@ class FashionProductFilterTests(TestCase):
 
         self.assertEqual(items[0]["current_price"], Decimal("64.00"))
         self.assertEqual(items[0]["original_price"], Decimal("80.00"))
+
+    def test_new_store_spiders_only_follow_product_urls(self):
+        cases = (
+            (
+                AdidasSpider,
+                "https://www.adidas.com/us/men-sale",
+                '<a href="/us/campus-shoes/HQ8708.html">Product</a>',
+                "HQ8708.html",
+            ),
+            (
+                ColumbiaSpider,
+                "https://www.columbia.com/c/mens-clothing-sale/",
+                '<a href="/p/mens-rain-jacket-1533891.html?color=379">Product</a>',
+                "1533891.html",
+            ),
+            (
+                NikeSpider,
+                "https://www.nike.com/w/mens-sale-3yaepznik1",
+                '<a href="https://www.nike.com/t/cortez-mens-shoes/SxhPXX/DM4044-108">Product</a>',
+                "DM4044-108",
+            ),
+        )
+        for spider_class, url, html, expected in cases:
+            spider = spider_class(audience="men", max_pages=1)
+            response = HtmlResponse(
+                url=url,
+                request=Request(url=url),
+                body=html,
+                encoding="utf-8",
+            )
+            requests = list(spider.parse_sale_page(response, "men", 1))
+            self.assertEqual(len(requests), 1)
+            self.assertIn(expected, requests[0].url)
