@@ -8,13 +8,12 @@ from urllib.parse import urlsplit, urlunsplit
 import scrapy
 
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
+from webdriver_manager.firefox import GeckoDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-import time
 
 
 class RetailerSaleSpider(scrapy.Spider):
@@ -29,42 +28,27 @@ class RetailerSaleSpider(scrapy.Spider):
         '[class*="ProductImage"] img::attr(src)',
     )
     custom_settings = {
-        # DISABLE proxies - use YOUR home IP with proper fingerprint
-        "USE_PROXIES": False,  # Set to True if you want to use proxies
-        
-        # Use YOUR real Firefox fingerprint (set in middleware)
+        "USE_PROXIES": False,
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
-        
         "DOWNLOADER_MIDDLEWARES": {
-            # Headers middleware (uses your fingerprint)
             "catalog.scrapers.middlewares.StyleLevelingHeadersMiddleware": 410,
-            # Proxy middleware (disabled by default)
             "catalog.scrapers.middlewares.ProxyMiddleware": 350,
         },
-        
-        # Very conservative settings for home IP
-        "DOWNLOAD_DELAY": 5.0,  # 5 second delay between requests
+        "DOWNLOAD_DELAY": 5.0,
         "RANDOMIZE_DOWNLOAD_DELAY": True,
-        "CONCURRENT_REQUESTS": 1,  # Only 1 request at a time
+        "CONCURRENT_REQUESTS": 1,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
-        
         "AUTOTHROTTLE_ENABLED": True,
         "AUTOTHROTTLE_START_DELAY": 5.0,
         "AUTOTHROTTLE_MAX_DELAY": 30,
-        
         "RETRY_TIMES": 3,
-        "RETRY_HTTP_CODES": [429, 500, 502, 503, 504],  # Don't retry 403
-        
+        "RETRY_HTTP_CODES": [429, 500, 502, 503, 504],
         "DOWNLOAD_TIMEOUT": 60,
-        "ROBOTSTXT_OBEY": False,  # Disable robots.txt to test
+        "ROBOTSTXT_OBEY": False,
         "LOG_LEVEL": "INFO",
         "HTTPERROR_ALLOWED_CODES": [403],
-        
-        # Cookie handling
         "COOKIES_ENABLED": True,
         "COOKIES_DEBUG": False,
-        
-        # Real browser headers (these will be overridden by middleware)
         "DEFAULT_REQUEST_HEADERS": {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
@@ -101,11 +85,8 @@ class RetailerSaleSpider(scrapy.Spider):
             )
 
     def parse_sale_page(self, response, audience, page_number):
-        """Discover product pages and follow catalog pagination."""
-
         if response.status == 403:
             self.logger.error("%s blocked with HTTP 403", self.store_name)
-            # Wait longer before retrying
             time.sleep(random.uniform(10, 30))
             return
 
@@ -127,12 +108,9 @@ class RetailerSaleSpider(scrapy.Spider):
                 if self.is_product_url(absolute) and absolute not in clean_links:
                     clean_links.append(absolute)
 
-        # Process each product with human-like delay
         for idx, product_url in enumerate(clean_links):
-            # Add delay between products (like a human browsing)
             if idx > 0:
                 time.sleep(random.uniform(1.0, 3.0))
-            
             yield scrapy.Request(
                 product_url,
                 callback=self.parse_product,
@@ -143,7 +121,6 @@ class RetailerSaleSpider(scrapy.Spider):
 
         next_url = self.next_page_url(response, page_number)
         if next_url and (self.max_pages is None or page_number < self.max_pages):
-            # Wait before going to next page
             time.sleep(random.uniform(2.0, 5.0))
             yield response.follow(
                 next_url,
@@ -154,8 +131,6 @@ class RetailerSaleSpider(scrapy.Spider):
             )
 
     def parse_product(self, response, sale_audience):
-        """Convert a retailer product page into the shared pipeline schema."""
-
         product = self._json_ld_product(response)
         offers = product.get("offers") or {}
         if isinstance(offers, list):
@@ -355,7 +330,7 @@ class PacSunSpider(RetailerSaleSpider):
     
     custom_settings = {
         **RetailerSaleSpider.custom_settings,
-        "DOWNLOAD_DELAY": 8.0,  # Extra slow for PacSun
+        "DOWNLOAD_DELAY": 8.0,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
         "RETRY_TIMES": 2,
     }
@@ -382,6 +357,31 @@ class HollisterSpider(RetailerSaleSpider):
 
     def is_product_url(self, url):
         return "/shop/us/p/" in urlsplit(url).path
+    
+    def parse_sale_page(self, response, audience, page_number):
+        """Use Selenium if blocked."""
+        if response.status == 403:
+            self.logger.error("Hollister blocked with HTTP 403, using Selenium...")
+            time.sleep(random.uniform(10, 20))
+            yield scrapy.Request(
+                response.url,
+                callback=self.parse_sale_page_with_selenium,
+                cb_kwargs={"audience": audience, "page_number": page_number},
+                dont_filter=True,
+                meta={'use_selenium': True},
+            )
+            return
+        yield from super().parse_sale_page(response, audience, page_number)
+    
+    def parse_sale_page_with_selenium(self, response, audience, page_number):
+        """Parse sale page with Selenium."""
+        driver = None
+        try:
+            options = Options()
+            options.add_argument('--headless')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.set_preference("general.useragent.override",
 
 
 class UrbanOutfittersSpider(RetailerSaleSpider):
@@ -420,7 +420,6 @@ class HMSpider(RetailerSaleSpider):
         "DOWNLOAD_DELAY": 10.0,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
         "RETRY_TIMES": 2,
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
     }
 
     def is_product_url(self, url):
@@ -428,132 +427,57 @@ class HMSpider(RetailerSaleSpider):
     
     def parse_product(self, response, sale_audience):
         """Use Selenium for H&M to get JavaScript-rendered content."""
-        
         driver = None
         try:
-            # Setup Chrome options for headless browsing
             options = Options()
-            options.add_argument('--headless')  # Run in background
+            options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option('useAutomationExtension', False)
+            options.set_preference("general.useragent.override", 
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0")
+            options.set_preference("dom.webdriver.enabled", False)
+            options.set_preference("useAutomationExtension", False)
+            options.set_preference("media.navigator.enabled", False)
             
-            # Add your real browser fingerprint
-            options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0')
-            
-            # Add additional headers to look more like a real browser
-            options.add_argument('--window-size=1920,1080')
-            options.add_argument('--disable-extensions')
-            options.add_argument('--disable-setuid-sandbox')
-            
-            # Initialize Chrome driver with automatic driver management
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
-            
-            # Set page load timeout
+            service = Service(GeckoDriverManager().install())
+            driver = webdriver.Firefox(service=service, options=options)
             driver.set_page_load_timeout(30)
             
-            # Load the page
             self.logger.info(f"Loading H&M product with Selenium: {response.url}")
             driver.get(response.url)
+            time.sleep(3)
             
-            # Wait for the page to load JavaScript content
-            time.sleep(3)  # Initial wait for page to render
-            
-            # Wait for price to load
-            wait = WebDriverWait(driver, 15)
-            
-            # Try multiple selectors for price
-            price_selectors = [
-                '[class*="price"]',
-                '[class*="Price"]',
-                '.product-price',
-                '[data-testid*="price"]',
-                'span[itemprop="price"]',
-                '.price',
-                '.product__price',
-                '.price__current',
-                '[class*="sale-price"]',
-                '.sale-price',
-            ]
-            
+            page_source = driver.page_source
             price = None
-            price_text = None
             
-            for selector in price_selectors:
-                try:
-                    # Wait for element to be present
-                    element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-                    price_text = element.text.strip()
-                    
-                    if price_text:
-                        # Remove currency symbols and clean
-                        price_text = price_text.replace('$', '').replace('€', '').replace('£', '').strip()
-                        
-                        # Extract first number
-                        import re
-                        price_match = re.search(r'[\d.]+', price_text)
-                        if price_match:
-                            price = self._decimal(price_match.group())
-                            if price and price > 0:
-                                self.logger.info(f"Found price: ${price}")
-                                break
-                except Exception as e:
-                    # Selector didn't find anything, try next
-                    continue
-            
-            # If no price found, try finding it in page source
-            if price is None:
-                self.logger.warning(f"Price not found in elements, trying page source...")
-                page_source = driver.page_source
-                
-                # Look for price patterns in the page source
-                import re
-                price_patterns = [
-                    r'"price"\s*:\s*"([\d.]+)"',
-                    r'"price"\s*:\s*([\d.]+)',
-                    r'"currentPrice"\s*:\s*"([\d.]+)"',
-                    r'"Price"\s*:\s*([\d.]+)',
-                    r'"salePrice"\s*:\s*"([\d.]+)"',
-                    r'productPrice["\']?\s*[:=]\s*["\']?([\d.]+)',
-                ]
-                
-                for pattern in price_patterns:
-                    match = re.search(pattern, page_source)
-                    if match:
-                        price_str = match.group(1)
-                        try:
-                            price = self._decimal(price_str)
-                            if price and price > 0:
-                                self.logger.info(f"Found price in source: ${price}")
-                                break
-                        except:
-                            continue
-            
-            # Get product name
-            name = None
-            name_selectors = [
-                'h1',
-                '[class*="product-name"]',
-                '[class*="ProductName"]',
-                '[data-testid*="product-name"]',
-                '.product-title',
-                'meta[property="og:title"]::attr(content)',
+            price_patterns = [
+                r'"price"\s*:\s*"([\d.]+)"',
+                r'"price"\s*:\s*([\d.]+)',
+                r'"currentPrice"\s*:\s*"([\d.]+)"',
+                r'"salePrice"\s*:\s*"([\d.]+)"',
+                r'\$(\d+\.\d{2})',
             ]
             
+            for pattern in price_patterns:
+                match = re.search(pattern, page_source)
+                if match:
+                    try:
+                        price = self._decimal(match.group(1))
+                        if price and price > 0:
+                            break
+                    except:
+                        continue
+            
+            if price is None:
+                self.logger.warning(f"No price found for H&M product: {response.url}")
+                return
+            
+            name = None
+            name_selectors = ['h1', '[class*="product-name"]', '.product-title']
             for selector in name_selectors:
                 try:
-                    if selector.endswith('::attr(content)'):
-                        # Handle meta tags
-                        element = driver.find_element(By.CSS_SELECTOR, selector.replace('::attr(content)', ''))
-                        name = element.get_attribute('content')
-                    else:
-                        element = driver.find_element(By.CSS_SELECTOR, selector)
-                        name = element.text.strip()
-                    
+                    element = driver.find_element(By.CSS_SELECTOR, selector)
+                    name = element.text.strip()
                     if name:
                         break
                 except:
@@ -562,123 +486,63 @@ class HMSpider(RetailerSaleSpider):
             if not name:
                 name = "H&M item"
             
-            # Get original/regular price
             original_price = None
-            original_selectors = [
-                '[class*="original"]',
-                '[class*="regular"]',
-                '[class*="was"]',
-                'del',
-                's',
-                '[class*="strike"]',
-                '[class*="compare"]',
-                '.price__regular',
-                '.regular-price',
-            ]
-            
+            original_selectors = ['[class*="original"]', 'del', 's']
             for selector in original_selectors:
                 try:
                     elements = driver.find_elements(By.CSS_SELECTOR, selector)
                     for element in elements:
-                        original_text = element.text.strip()
-                        if original_text:
-                            # Clean the price
-                            original_text = original_text.replace('$', '').replace('€', '').replace('£', '').strip()
-                            import re
-                            price_match = re.search(r'[\d.]+', original_text)
-                            if price_match:
-                                original_price = self._decimal(price_match.group())
-                                if original_price and original_price > 0:
+                        text = element.text.strip()
+                        if text and '$' in text:
+                            match = re.search(r'\$?(\d+\.\d{2})', text)
+                            if match:
+                                original_price = self._decimal(match.group(1))
+                                if original_price:
                                     break
                     if original_price:
                         break
                 except:
                     continue
             
-            # If no price found, log and skip
-            if price is None:
-                self.logger.warning(f"No price found for H&M product: {response.url}")
-                return
-            
-            # Get images
             image_urls = []
             try:
-                # Try to get images from meta tags
-                image_selectors = [
-                    'meta[property="og:image"]',
-                    'meta[name="twitter:image"]',
-                    'img[class*="product"]',
-                    'img[class*="Product"]',
-                    '.product-image img',
-                ]
-                
+                image_selectors = ['meta[property="og:image"]', 'img[class*="product"]']
                 for selector in image_selectors:
                     if 'meta' in selector:
-                        element = driver.find_element(By.CSS_SELECTOR, selector)
-                        if element:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for element in elements:
                             img_url = element.get_attribute('content')
                             if img_url:
                                 image_urls.append(img_url)
                     else:
                         elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        for element in elements[:5]:  # Limit to 5 images
+                        for element in elements[:5]:
                             img_url = element.get_attribute('src')
                             if img_url and 'data:image' not in img_url:
                                 image_urls.append(img_url)
-                
-                # Clean image URLs
                 image_urls = [self._clean_image_url(url) for url in image_urls if url]
-                image_urls = list(dict.fromkeys(image_urls))[:12]  # Deduplicate and limit
-                
-            except Exception as e:
-                self.logger.warning(f"Could not extract images: {e}")
+                image_urls = list(dict.fromkeys(image_urls))[:12]
+            except:
+                pass
             
-            # Build product data
-            product_data = {
+            yield {
                 "external_product_id": self.external_id_from_url(response.url)[:50],
                 "product_name": " ".join(str(name).split())[:255],
                 "brand_name": "H&M",
-                "category": self._breadcrumb_from_selenium(driver) or "Clothing",
+                "category": "Clothing",
                 "audience": sale_audience,
                 "product_page_url": response.url,
                 "current_price": price,
                 "original_price": original_price or price,
-                "image_urls": image_urls[:12],
+                "image_urls": image_urls,
             }
-            
-            self.logger.info(f"✅ Scraped H&M product: {product_data['product_name'][:50]} - ${price}")
-            yield product_data
             
         except Exception as e:
             self.logger.error(f"Selenium error for {response.url}: {e}")
-            # Fallback to parent parser if Selenium fails
-            self.logger.info("Falling back to parent parser...")
             yield from super().parse_product(response, sale_audience)
-            
         finally:
             if driver:
                 driver.quit()
-    
-    def _breadcrumb_from_selenium(self, driver):
-        """Extract breadcrumb using Selenium."""
-        try:
-            breadcrumb_selectors = [
-                '[aria-label="breadcrumb"] a',
-                '.breadcrumb a',
-                '[class*="Breadcrumb"] a',
-                '[class*="breadcrumb"] a',
-            ]
-            
-            for selector in breadcrumb_selectors:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                if elements:
-                    # Get last breadcrumb
-                    last_element = elements[-1]
-                    return last_element.text.strip()
-            
-            return None
-        except:
-            return None
 
 
 class GapSpider(RetailerSaleSpider):
@@ -709,10 +573,62 @@ class UniqloSpider(RetailerSaleSpider):
         "women": "https://www.uniqlo.com/us/en/feature/sale/women",
         "men": "https://www.uniqlo.com/us/en/feature/sale/men",
     }
-    product_link_selectors = ('a.product-tile__link::attr(href)',)
+    product_link_selectors = (
+        'a.product-tile__link::attr(href)',
+        'a[href*="/products/"]::attr(href)',
+        '.product-tile a::attr(href)',
+    )
 
     def is_product_url(self, url):
-        return "/us/en/products/" in urlsplit(url).path
+        return "/us/en/products/" in urlsplit(url).path or "/products/" in urlsplit(url).path
+
+    def parse_sale_page(self, response, audience, page_number):
+        """Override to handle Uniqlo's specific structure."""
+        if response.status == 403:
+            self.logger.error("Uniqlo blocked with HTTP 403")
+            time.sleep(random.uniform(10, 30))
+            return
+
+        links = []
+        for selector in self.product_link_selectors:
+            links.extend(response.css(selector).getall())
+
+        clean_links = []
+        for link in links:
+            absolute = response.urljoin(link)
+            if self.is_product_url(absolute) and absolute not in clean_links:
+                clean_links.append(absolute)
+
+        if not clean_links:
+            self.logger.error("No product links found on %s", response.url)
+            # Try alternative selectors for Uniqlo
+            alt_links = response.css('a[href*="product"]::attr(href)').getall()
+            for link in alt_links:
+                absolute = response.urljoin(link)
+                if self.is_product_url(absolute) and absolute not in clean_links:
+                    clean_links.append(absolute)
+
+        for idx, product_url in enumerate(clean_links):
+            if idx > 0:
+                time.sleep(random.uniform(1.0, 3.0))
+            yield scrapy.Request(
+                product_url,
+                callback=self.parse_product,
+                cb_kwargs={"sale_audience": audience},
+                errback=self.request_failed,
+                dont_filter=True,
+            )
+
+        next_url = self.next_page_url(response, page_number)
+        if next_url and (self.max_pages is None or page_number < self.max_pages):
+            time.sleep(random.uniform(2.0, 5.0))
+            yield response.follow(
+                next_url,
+                callback=self.parse_sale_page,
+                cb_kwargs={"audience": audience, "page_number": page_number + 1},
+                errback=self.request_failed,
+                dont_filter=True,
+            )
 
     def parse_product(self, response, sale_audience):
         state = None
@@ -761,7 +677,6 @@ class UniqloSpider(RetailerSaleSpider):
             return
 
         image_urls = []
-
         def collect_images(value):
             if isinstance(value, dict):
                 for child in value.values():
@@ -798,10 +713,14 @@ class Forever21Spider(RetailerSaleSpider):
         "men": "https://www.forever21.com/collections/mens-sale",
         "women": "https://www.forever21.com/collections/womens-sale",
     }
-    product_link_selectors = ('a[href*="/products/"]::attr(href)',)
+    product_link_selectors = (
+        'a[href*="/products/"]::attr(href)',
+        'a[href*="/product/"]::attr(href)',
+    )
 
     def is_product_url(self, url):
-        return "/products/" in urlsplit(url).path
+        path = urlsplit(url).path
+        return "/products/" in path or "/product/" in path
 
 
 class AsosSpider(RetailerSaleSpider):

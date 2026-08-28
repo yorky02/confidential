@@ -19,26 +19,75 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {store: cotton_on, allow_failure: false}
-          - {store: pacsun, allow_failure: false}
-          - {store: hm, allow_failure: false}
-          - {store: uniqlo, allow_failure: false}
-          - {store: forever21, allow_failure: false}
-          - {store: asos, allow_failure: false}
-          - {store: gap, allow_failure: true}
-          - {store: hollister, allow_failure: true}
-          - {store: urban_outfitters, allow_failure: true}
+          # Working stores (no Selenium needed)
+          - {store: cotton_on, allow_failure: false, use_selenium: false}
+          - {store: pacsun, allow_failure: false, use_selenium: false}
+          - {store: gap, allow_failure: true, use_selenium: false}
+          - {store: asos, allow_failure: false, use_selenium: false}
+          - {store: forever21, allow_failure: false, use_selenium: false}
+          
+          # Stores that need Selenium
+          - {store: hm, allow_failure: false, use_selenium: true}
+          - {store: hollister, allow_failure: true, use_selenium: true}
+          - {store: urban_outfitters, allow_failure: true, use_selenium: true}
+          
+          # Uniqlo needs special handling
+          - {store: uniqlo, allow_failure: false, use_selenium: false}
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ALLOWED_HOSTS: localhost
+      USE_SELENIUM: ${{ matrix.use_selenium }}
+      
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
+      
+      - name: Install system dependencies (for Selenium stores)
+        if: matrix.use_selenium == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y firefox xvfb
+      
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Install additional Selenium dependencies (for Selenium stores)
+        if: matrix.use_selenium == true
+        run: |
+          pip install selenium webdriver-manager
+      
       - name: Verify database secret
         run: test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL repository secret" && exit 1)
+      
+      - name: Run Django migrations (if needed)
+        run: |
+          python styleleveling/manage.py migrate --noinput || true
+      
       - name: Import retailer and verify products
-        run: python styleleveling/manage.py scrape_sales --stores "${{ matrix.store }}" --minimum-successful-stores 1
+        run: |
+          if [ "${{ matrix.use_selenium }}" = "true" ]; then
+            # Run with XVFB for headless Firefox support
+            xvfb-run -a python styleleveling/manage.py scrape_sales --stores "${{ matrix.store }}" --minimum-successful-stores 1
+          else
+            python styleleveling/manage.py scrape_sales --stores "${{ matrix.store }}" --minimum-successful-stores 1
+          fi
+      
+      - name: Debug logs on failure
+        if: failure()
+        run: |
+          echo "=== Last 100 lines of logs ==="
+          tail -n 100 *.log 2>/dev/null || echo "No log files found"
+      
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.store }}
+          path: |
+            *.log
+            *.json
+          retention-days: 7
