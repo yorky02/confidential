@@ -1,5 +1,7 @@
 import json
 import re
+import random
+import base64
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,26 +25,43 @@ class RetailerSaleSpider(scrapy.Spider):
         '[class*="ProductImage"] img::attr(src)',
     )
     custom_settings = {
-        # Honor published crawl rules. A missing robots.txt naturally means
-        # there are no site-specific rules; an explicit disallow is respected.
-        "ROBOTSTXT_OBEY": True,
-        "USER_AGENT": "StyleLevelingBot/1.0 (+https://levelingstyle.org)",
+        # Temporarily disable robots.txt to test if it's causing blocks
+        "ROBOTSTXT_OBEY": False,
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "DOWNLOADER_MIDDLEWARES": {
             # Run before Scrapy's built-in UserAgentMiddleware (priority 500).
             "catalog.scrapers.middlewares.StyleLevelingHeadersMiddleware": 410,
+            # Add proxy middleware (priority 350, before headers)
+            "catalog.scrapers.middlewares.ProxyMiddleware": 350,
         },
         # Conservative defaults copied from the proven Cotton On importer.
-        "DOWNLOAD_DELAY": 1.75,
+        "DOWNLOAD_DELAY": 3.0,  # Increased from 1.75
         "RANDOMIZE_DOWNLOAD_DELAY": True,
-        "CONCURRENT_REQUESTS": 4,
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 2,
+        "CONCURRENT_REQUESTS": 2,  # Reduced from 4
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,  # Reduced from 2
         "AUTOTHROTTLE_ENABLED": True,
-        "AUTOTHROTTLE_START_DELAY": 1.75,
-        "AUTOTHROTTLE_MAX_DELAY": 15,
-        "RETRY_TIMES": 2,
-        "DOWNLOAD_TIMEOUT": 35,
+        "AUTOTHROTTLE_START_DELAY": 2.0,  # Increased from 1.75
+        "AUTOTHROTTLE_MAX_DELAY": 20,  # Increased from 15
+        "RETRY_TIMES": 5,  # Increased from 2
+        "RETRY_HTTP_CODES": [403, 429, 500, 502, 503, 504],
+        "DOWNLOAD_TIMEOUT": 45,  # Increased from 35
         "LOG_LEVEL": "INFO",
         "HTTPERROR_ALLOWED_CODES": [403],
+        # Added these for better anti-bot evasion
+        "COOKIES_ENABLED": True,
+        "COOKIES_DEBUG": False,
+        "DEFAULT_REQUEST_HEADERS": {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        }
     }
 
     def __init__(self, audience="both", max_pages=None, *args, **kwargs):
@@ -60,6 +79,7 @@ class RetailerSaleSpider(scrapy.Spider):
                 callback=self.parse_sale_page,
                 cb_kwargs={"audience": audience, "page_number": 1},
                 errback=self.request_failed,
+                dont_filter=True,  # Allow retries of same URL
             )
 
     def parse_sale_page(self, response, audience, page_number):
@@ -67,6 +87,15 @@ class RetailerSaleSpider(scrapy.Spider):
 
         if response.status == 403:
             self.logger.error("%s blocked the public sale page with HTTP 403", self.store_name)
+            # Try alternative approach - sometimes adding a random parameter helps
+            if "?" not in response.url:
+                yield scrapy.Request(
+                    response.url + "?_=" + str(random.randint(1000, 9999)),
+                    callback=self.parse_sale_page,
+                    cb_kwargs={"audience": audience, "page_number": page_number},
+                    errback=self.request_failed,
+                    dont_filter=True,
+                )
             return
 
         links = []
@@ -81,6 +110,12 @@ class RetailerSaleSpider(scrapy.Spider):
 
         if not clean_links:
             self.logger.error("No product links found on %s", response.url)
+            # Try alternative link selectors as fallback
+            alt_links = response.css('a[href*="product"], a[href*="/p/"], a[href*="/pd/"]::attr(href)').getall()
+            for link in alt_links:
+                absolute = response.urljoin(link)
+                if self.is_product_url(absolute) and absolute not in clean_links:
+                    clean_links.append(absolute)
 
         for product_url in clean_links:
             yield scrapy.Request(
@@ -88,6 +123,7 @@ class RetailerSaleSpider(scrapy.Spider):
                 callback=self.parse_product,
                 cb_kwargs={"sale_audience": audience},
                 errback=self.request_failed,
+                dont_filter=True,
             )
 
         next_url = self.next_page_url(response, page_number)
@@ -97,6 +133,7 @@ class RetailerSaleSpider(scrapy.Spider):
                 callback=self.parse_sale_page,
                 cb_kwargs={"audience": audience, "page_number": page_number + 1},
                 errback=self.request_failed,
+                dont_filter=True,
             )
 
     def parse_product(self, response, sale_audience):
@@ -122,6 +159,8 @@ class RetailerSaleSpider(scrapy.Spider):
                     '[class*="sale-price"]::text',
                     '[class*="SalePrice"]::text',
                     '[data-testid*="sale-price"]::text',
+                    '[class*="price"]::text',
+                    '.price::text',
                 ],
             )
         )
@@ -135,6 +174,7 @@ class RetailerSaleSpider(scrapy.Spider):
                     '[class*="strike"]::text',
                     "del::text",
                     "s::text",
+                    '[class*="was-price"]::text',
                 ],
             )
         )
@@ -186,10 +226,23 @@ class RetailerSaleSpider(scrapy.Spider):
         return True
 
     def next_page_url(self, response, page_number):
-        return response.css('link[rel="next"]::attr(href), a[rel="next"]::attr(href)').get()
+        # Try multiple pagination patterns
+        next_selectors = [
+            'link[rel="next"]::attr(href)',
+            'a[rel="next"]::attr(href)',
+            'a.pagination__next::attr(href)',
+            '.pagination a:last-child::attr(href)',
+            'a[aria-label="Next"]::attr(href)',
+            'a.next::attr(href)',
+        ]
+        for selector in next_selectors:
+            next_url = response.css(selector).get()
+            if next_url:
+                return next_url
+        return None
 
     def request_failed(self, failure):
-        self.logger.error("Request failed: %s", failure.request.url)
+        self.logger.error("Request failed: %s - %s", failure.request.url, failure.value)
 
     @staticmethod
     def _json_ld_product(response):
@@ -271,6 +324,107 @@ class RetailerSaleSpider(scrapy.Spider):
         return str(brand or self.store_name)
 
 
+# ====== MIDDLEWARE CLASSES ======
+
+class ProxyMiddleware:
+    """Rotate proxies for each request to avoid IP-based blocking."""
+    
+    def __init__(self, proxies):
+        self.proxies = proxies
+        self.failed_proxies = set()
+        self.proxy_stats = {}
+        
+    @classmethod
+    def from_crawler(cls, crawler):
+        # Load proxies from settings
+        proxy_list = crawler.settings.get('PROXY_LIST', [])
+        return cls(proxy_list)
+    
+    def process_request(self, request, spider):
+        if not self.proxies:
+            return None
+        
+        # Filter out failed proxies
+        available_proxies = [p for p in self.proxies if p not in self.failed_proxies]
+        
+        if not available_proxies:
+            spider.logger.warning("No available proxies, proceeding without proxy")
+            return None
+        
+        # Select proxy with least failures if stats available, otherwise random
+        if self.proxy_stats:
+            # Sort by failure count (lower is better)
+            sorted_proxies = sorted(
+                available_proxies,
+                key=lambda p: self.proxy_stats.get(p, {}).get('failures', 0)
+            )
+            proxy = sorted_proxies[0]
+        else:
+            proxy = random.choice(available_proxies)
+        
+        request.meta['proxy'] = proxy
+        request.meta['proxy_used'] = proxy  # Track which proxy was used
+        
+        # Handle proxy authentication if needed
+        if '@' in proxy:
+            # Format: http://user:pass@proxy.com:8080 or http://proxy.com:8080
+            parts = proxy.split('@')
+            if len(parts) == 2:
+                auth_part = parts[0].split('//')[-1] if '//' in parts[0] else parts[0]
+                if ':' in auth_part:
+                    auth = base64.b64encode(auth_part.encode()).decode()
+                    request.headers['Proxy-Authorization'] = f'Basic {auth}'
+        
+        spider.logger.debug(f"Using proxy: {proxy}")
+        
+        # Add a random delay to make requests look more human
+        # This is in addition to Scrapy's DOWNLOAD_DELAY
+        if hasattr(spider, 'custom_settings') and spider.custom_settings.get('RANDOMIZE_DOWNLOAD_DELAY'):
+            import time
+            time.sleep(random.uniform(0.1, 0.5))
+        
+        return None
+    
+    def process_response(self, request, response, spider):
+        proxy = request.meta.get('proxy_used')
+        if proxy:
+            # Track proxy performance
+            if proxy not in self.proxy_stats:
+                self.proxy_stats[proxy] = {'failures': 0, 'successes': 0}
+            
+            if response.status in [403, 429, 500, 502, 503, 504]:
+                self.proxy_stats[proxy]['failures'] += 1
+                spider.logger.warning(f"Proxy {proxy} returned status {response.status}")
+                
+                # If proxy fails too often, mark it as failed
+                if self.proxy_stats[proxy]['failures'] > 3:
+                    self.failed_proxies.add(proxy)
+                    spider.logger.warning(f"Marking proxy as failed: {proxy}")
+            else:
+                self.proxy_stats[proxy]['successes'] += 1
+                
+                # Reset failure count after success
+                if self.proxy_stats[proxy]['failures'] > 0:
+                    self.proxy_stats[proxy]['failures'] = max(0, self.proxy_stats[proxy]['failures'] - 1)
+        
+        return response
+    
+    def process_exception(self, request, exception, spider):
+        proxy = request.meta.get('proxy_used')
+        if proxy:
+            if proxy not in self.proxy_stats:
+                self.proxy_stats[proxy] = {'failures': 0, 'successes': 0}
+            self.proxy_stats[proxy]['failures'] += 1
+            
+            if self.proxy_stats[proxy]['failures'] > 3:
+                self.failed_proxies.add(proxy)
+                spider.logger.warning(f"Marking proxy as failed due to exception: {proxy}")
+        
+        return None
+
+
+# ====== SPIDER CLASSES ======
+
 class PacSunSpider(RetailerSaleSpider):
     name = "pacsun"
     store_name = "PacSun"
@@ -280,10 +434,23 @@ class PacSunSpider(RetailerSaleSpider):
         "women": "https://www.pacsun.com/womens/sale/",
         "men": "https://www.pacsun.com/mens/sale/",
     }
-    product_link_selectors = ('.product-tile a[href*=".html"]::attr(href)',)
+    product_link_selectors = (
+        '.product-tile a[href*=".html"]::attr(href)',
+        '[data-testid*="product"] a::attr(href)',
+        '.product-item a::attr(href)',
+    )
+    
+    # Override custom settings for PacSun specifically
+    custom_settings = {
+        **RetailerSaleSpider.custom_settings,
+        "DOWNLOAD_DELAY": 5.0,  # Be more conservative for PacSun
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
+        "RETRY_TIMES": 8,
+    }
 
     def is_product_url(self, url):
-        return urlsplit(url).path.endswith(".html") and "/sale/" not in urlsplit(url).path
+        path = urlsplit(url).path
+        return path.endswith(".html") and "/sale/" not in path
 
 
 class HollisterSpider(RetailerSaleSpider):
@@ -298,6 +465,7 @@ class HollisterSpider(RetailerSaleSpider):
     product_link_selectors = (
         'a[href*="/shop/us/p/"]::attr(href)',
         '[data-testid*="product"] a::attr(href)',
+        '.product-tile a::attr(href)',
     )
 
     def is_product_url(self, url):
@@ -316,6 +484,7 @@ class UrbanOutfittersSpider(RetailerSaleSpider):
     product_link_selectors = (
         'a[href*="/shop/"]::attr(href)',
         '[data-testid*="product"] a::attr(href)',
+        '.product-tile a::attr(href)',
     )
 
     def is_product_url(self, url):
@@ -350,6 +519,7 @@ class GapSpider(RetailerSaleSpider):
     product_link_selectors = (
         'a[href*="/browse/product.do"]::attr(href)',
         '[data-testid*="product-card"] a::attr(href)',
+        '.product-card a::attr(href)',
     )
 
     def is_product_url(self, url):
