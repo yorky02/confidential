@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.db.models import Count, Q
 from .models import (
     Store,
     Product,
@@ -31,9 +32,28 @@ class ListingAdmin(admin.ModelAdmin):
 
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
-    list_display = ["store_name", "is_active", "is_guest_visible", "last_sync_at"]
+    list_display = ["store_name", "active_products", "latest_import_count", "latest_import_status", "is_active", "is_guest_visible", "last_sync_at"]
     list_filter = ["is_active", "is_guest_visible"]
     search_fields = ["store_name"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _active_products=Count("listing", filter=Q(listing__is_promo_active=True), distinct=True)
+        )
+
+    @admin.display(ordering="_active_products", description="Active products")
+    def active_products(self, obj):
+        return obj._active_products
+
+    @admin.display(description="Latest import")
+    def latest_import_count(self, obj):
+        run = obj.syncrun_set.order_by("-started_at").first()
+        return run.listings_found if run else "—"
+
+    @admin.display(boolean=True, description="Import succeeded")
+    def latest_import_status(self, obj):
+        run = obj.syncrun_set.order_by("-started_at").first()
+        return run.successful if run else None
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):

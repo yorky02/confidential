@@ -95,7 +95,7 @@ class DjangoCatalogPipeline:
 
     def spider_closed(self, spider, reason):
         error_count = self.crawler.stats.get_value("log_count/ERROR", 0)
-        successful = reason == "finished" and error_count == 0
+        successful = self.listings_found > 0
         self.store.last_sync_at = timezone.now()
         self.store.save(update_fields=["last_sync_at"])
         self.sync_run.finished_at = timezone.now()
@@ -105,4 +105,6 @@ class DjangoCatalogPipeline:
             self.sync_run.error_message = (
                 f"Spider closed: {reason}; logged errors: {error_count}"
             )
+        elif error_count:
+            self.sync_run.error_message = f"Imported with {error_count} logged error(s)."
         self.sync_run.save()

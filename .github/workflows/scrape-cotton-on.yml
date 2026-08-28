@@ -6,13 +6,26 @@ on:
     - cron: "17 8 * * *"
 
 concurrency:
-  group: cotton-on-import
+  group: retailer-sale-import
   cancel-in-progress: false
 
 jobs:
   scrape:
+    name: Import ${{ matrix.store }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 75
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {store: cotton_on, allow_failure: false}
+          - {store: pacsun, allow_failure: false}
+          - {store: hm, allow_failure: false}
+          - {store: uniqlo, allow_failure: false}
+          - {store: gap, allow_failure: true}
+          - {store: hollister, allow_failure: true}
+          - {store: urban_outfitters, allow_failure: true}
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ALLOWED_HOSTS: localhost
@@ -25,4 +38,5 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Verify database secret
         run: test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL repository secret" && exit 1)
-      - run: python styleleveling/manage.py scrape_sales
+      - name: Import retailer and verify products
+        run: python styleleveling/manage.py scrape_sales --stores "${{ matrix.store }}" --minimum-successful-stores 1
